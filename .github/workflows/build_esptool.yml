@@ -10,7 +10,7 @@ jobs:
       matrix:
         os: [macos-10.15, ubuntu-latest, windows-latest]
         include:
-        - os: macos-latest
+        - os: macos-10.15
           TARGET: macos
         - os: ubuntu-latest
           TARGET: linux-amd64
@@ -23,7 +23,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v2
       - name: Set up Python 3.8
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v2
         with:
           python-version: 3.8
       - name: Install dependencies
