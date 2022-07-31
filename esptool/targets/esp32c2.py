@@ -8,14 +8,11 @@ import time
 
 from .esp32c3 import ESP32C3ROM
 from ..loader import ESPLoader
-from ..stub_flasher import ESP32C2StubCode
 
 
 class ESP32C2ROM(ESP32C3ROM):
     CHIP_NAME = "ESP32-C2"
     IMAGE_CHIP_ID = 12
-
-    STUB_CODE = ESP32C2StubCode
 
     IROM_MAP_START = 0x42000000
     IROM_MAP_END = 0x42400000
@@ -52,24 +49,39 @@ class ESP32C2ROM(ESP32C3ROM):
         "15m": 0x2,
     }
 
+    MEMORY_MAP = [
+        [0x00000000, 0x00010000, "PADDING"],
+        [0x3C000000, 0x3C400000, "DROM"],
+        [0x3FCA0000, 0x3FCE0000, "DRAM"],
+        [0x3FC88000, 0x3FD00000, "BYTE_ACCESSIBLE"],
+        [0x3FF00000, 0x3FF50000, "DROM_MASK"],
+        [0x40000000, 0x40090000, "IROM_MASK"],
+        [0x42000000, 0x42400000, "IROM"],
+        [0x4037C000, 0x403C0000, "IRAM"],
+    ]
+
     def get_pkg_version(self):
-        num_word = 3
-        block1_addr = self.EFUSE_BASE + 0x044
-        word3 = self.read_reg(block1_addr + (4 * num_word))
-        pkg_version = (word3 >> 21) & 0x0F
+        num_word = 1
+        block2_addr = self.EFUSE_BASE + 0x040
+        word1 = self.read_reg(block2_addr + (4 * num_word))
+        pkg_version = (word1 >> 22) & 0x07
         return pkg_version
 
     def get_chip_description(self):
         chip_name = {
             0: "ESP32-C2",
+            1: "ESP32-C2",
         }.get(self.get_pkg_version(), "unknown ESP32-C2")
         chip_revision = self.get_chip_revision()
 
         return "%s (revision %d)" % (chip_name, chip_revision)
 
     def get_chip_revision(self):
-        si = self.get_security_info()
-        return si["api_version"]
+        res = self.check_command("get security info", self.ESP_GET_SECURITY_INFO, b"")
+        # Checks only the first two bytes of api_version to be 2/4 status
+        # bytes invariant (needed for --before no_reset, as the last two bytes can
+        # get discarded)
+        return int.from_bytes(res[16:17], "little")
 
     def get_crystal_freq(self):
         # The crystal detection algorithm of ESP32/ESP8266 works for ESP32-C2 as well.
