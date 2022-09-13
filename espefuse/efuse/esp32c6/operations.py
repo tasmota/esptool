@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-# This file includes the operations with eFuses for ESP32-S3(beta2) chip
 #
-# SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+# This file includes the operations with eFuses for ESP32-C6 chip
+#
+# SPDX-FileCopyrightText: 2022 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import argparse
-import io
 import os  # noqa: F401. It is used in IDF scripts
 import traceback
 
@@ -34,8 +34,8 @@ def protect_options(p):
     p.add_argument(
         "--no-write-protect",
         help="Disable write-protecting of the key. The key remains writable. "
-        "(The keys use the RS coding scheme that does not support post-write "
-        "data changes. Forced write can damage RS encoding bits.) "
+        "(The keys use the RS coding scheme that does not support "
+        "post-write data changes. Forced write can damage RS encoding bits.) "
         "The write-protecting of keypurposes does not depend on the option, "
         "it will be set anyway.",
         action="store_true",
@@ -44,9 +44,8 @@ def protect_options(p):
         "--no-read-protect",
         help="Disable read-protecting of the key. The key remains readable software."
         "The key with keypurpose[USER, RESERVED and *_DIGEST] "
-        "will remain readable anyway. "
-        "For the rest keypurposes the read-protection will be defined the option "
-        "(Read-protect by default).",
+        "will remain readable anyway. For the rest keypurposes the read-protection "
+        "will be defined the option (Read-protect by default).",
         action="store_true",
     )
 
@@ -155,8 +154,9 @@ def add_commands(subparsers, efuses):
     p = subparsers.add_parser(
         "set_flash_voltage",
         help="Permanently set the internal flash voltage regulator "
-        "to either 1.8V, 3.3V or OFF. This means GPIO45 can be high or low at reset "
-        "without changing the flash voltage.",
+        "to either 1.8V, 3.3V or OFF. "
+        "This means GPIO45 can be high or low at reset without "
+        "changing the flash voltage.",
     )
     p.add_argument("voltage", help="Voltage selection", choices=["1.8V", "3.3V", "OFF"])
 
@@ -187,54 +187,13 @@ def get_custom_mac(esp, efuses, args):
 
 
 def set_flash_voltage(esp, efuses, args):
-    sdio_force = efuses["VDD_SPI_FORCE"]
-    sdio_tieh = efuses["VDD_SPI_TIEH"]
-    sdio_reg = efuses["VDD_SPI_XPD"]
-
-    # check efuses aren't burned in a way which makes this impossible
-    if args.voltage == "OFF" and sdio_reg.get() != 0:
-        raise esptool.FatalError(
-            "Can't set flash regulator to OFF as VDD_SPI_XPD efuse is already burned"
-        )
-
-    if args.voltage == "1.8V" and sdio_tieh.get() != 0:
-        raise esptool.FatalError(
-            "Can't set regulator to 1.8V is VDD_SPI_TIEH efuse is already burned"
-        )
-
-    if args.voltage == "OFF":
-        msg = "Disable internal flash voltage regulator (VDD_SPI). "
-        "SPI flash will need to be powered from an external source.\n"
-        "The following efuse is burned: VDD_SPI_FORCE.\n"
-        "It is possible to later re-enable the internal regulator (%s) " % (
-            "to 3.3V" if sdio_tieh.get() != 0 else "to 1.8V or 3.3V"
-        )
-        "by burning an additional efuse"
-    elif args.voltage == "1.8V":
-        msg = "Set internal flash voltage regulator (VDD_SPI) to 1.8V.\n"
-        "The following efuses are burned: VDD_SPI_FORCE, VDD_SPI_XPD.\n"
-        "It is possible to later increase the voltage to 3.3V (permanently) "
-        "by burning additional efuse VDD_SPI_TIEH"
-    elif args.voltage == "3.3V":
-        msg = "Enable internal flash voltage regulator (VDD_SPI) to 3.3V.\n"
-        "The following efuses are burned: VDD_SPI_FORCE, VDD_SPI_XPD, VDD_SPI_TIEH."
-    print(msg)
-
-    sdio_force.save(1)  # Disable GPIO45
-    if args.voltage != "OFF":
-        sdio_reg.save(1)  # Enable internal regulator
-    if args.voltage == "3.3V":
-        sdio_tieh.save(1)
-    print("VDD_SPI setting complete.")
-    if not efuses.burn_all(check_batch_mode=True):
-        return
-    print("Successful")
+    raise esptool.FatalError("set_flash_voltage is not supported!")
 
 
 def adc_info(esp, efuses, args):
     print("")
     # fmt: off
-    if efuses["BLK_VERSION_MAJOR"].get() == 1:
+    if efuses["BLOCK2_VERSION"].get() == 1:
         print("Temperature Sensor Calibration = {}C".format(efuses["TEMP_SENSOR_CAL"].get()))
 
         print("")
@@ -265,69 +224,8 @@ def adc_info(esp, efuses, args):
         print("    MODE3 D1 reading  (250mV):  {}".format(efuses["ADC2_MODE3_D1"].get()))
         print("    MODE3 D2 reading  (2000mV): {}".format(efuses["ADC2_MODE3_D2"].get()))
     else:
-        print("BLK_VERSION_MAJOR = {}".format(efuses["BLK_VERSION_MAJOR"].get_meaning()))
+        print("BLOCK2_VERSION = {}".format(efuses["BLOCK2_VERSION"].get_meaning()))
     # fmt: on
-
-
-def key_block_is_unused(block, key_purpose_block):
-    if not block.is_readable() or not block.is_writeable():
-        return False
-
-    if key_purpose_block.get() != "USER" or not key_purpose_block.is_writeable():
-        return False
-
-    if not block.get_bitstring().all(False):
-        return False
-
-    return True
-
-
-def get_next_key_block(efuses, current_key_block, block_name_list):
-    key_blocks = [b for b in efuses.blocks if b.key_purpose_name]
-    start = key_blocks.index(current_key_block)
-
-    # Sort key blocks so that we pick the next free block (and loop around if necessary)
-    key_blocks = key_blocks[start:] + key_blocks[0:start]
-
-    # Exclude any other blocks that will be be burned
-    key_blocks = [b for b in key_blocks if b.name not in block_name_list]
-
-    for block in key_blocks:
-        key_purpose_block = efuses[block.key_purpose_name]
-        if key_block_is_unused(block, key_purpose_block):
-            return block
-
-    return None
-
-
-def split_512_bit_key(efuses, block_name_list, datafile_list, keypurpose_list):
-    i = keypurpose_list.index("XTS_AES_256_KEY")
-    block_name = block_name_list[i]
-
-    block_num = efuses.get_index_block_by_name(block_name)
-    block = efuses.blocks[block_num]
-
-    data = datafile_list[i].read()
-    if len(data) != 64:
-        raise esptool.FatalError(
-            "Incorrect key file size %d, XTS_AES_256_KEY should be 64 bytes" % len(data)
-        )
-
-    key_block_2 = get_next_key_block(efuses, block, block_name_list)
-    if not key_block_2:
-        raise esptool.FatalError("XTS_AES_256_KEY requires two free keyblocks")
-
-    keypurpose_list.append("XTS_AES_256_KEY_1")
-    datafile_list.append(io.BytesIO(data[:32]))
-    block_name_list.append(block_name)
-
-    keypurpose_list.append("XTS_AES_256_KEY_2")
-    datafile_list.append(io.BytesIO(data[32:]))
-    block_name_list.append(key_block_2.name)
-
-    keypurpose_list.pop(i)
-    datafile_list.pop(i)
-    block_name_list.pop(i)
 
 
 def burn_key(esp, efuses, args, digest=None):
@@ -344,11 +242,6 @@ def burn_key(esp, efuses, args, digest=None):
     keypurpose_list = args.keypurpose[
         0 : len([name for name in args.keypurpose if name is not None]) :
     ]
-
-    if "XTS_AES_256_KEY" in keypurpose_list:
-        # XTS_AES_256_KEY is not an actual HW key purpose, needs to be split into
-        # XTS_AES_256_KEY_1 and XTS_AES_256_KEY_2
-        split_512_bit_key(efuses, block_name_list, datafile_list, keypurpose_list)
 
     util.check_duplicate_name_in_list(block_name_list)
     if len(block_name_list) != len(datafile_list) or len(block_name_list) != len(
@@ -400,8 +293,7 @@ def burn_key(esp, efuses, args, digest=None):
             read_protect = False
         write_protect = not args.no_write_protect
 
-        # using efuse instead of a block gives the advantage of
-        # checking it as the whole field.
+        # using efuse instead of a block gives the advantage of checking it as the whole field.
         efuse.save(data)
 
         disable_wr_protect_key_purpose = False
@@ -419,8 +311,8 @@ def burn_key(esp, efuses, args, digest=None):
                 disable_wr_protect_key_purpose = True
             else:
                 raise esptool.FatalError(
-                    "It is not possible to change '%s' to '%s' because "
-                    "write protection bit is set."
+                    "It is not possible to change '%s' to '%s' "
+                    "because write protection bit is set."
                     % (block.key_purpose_name, keypurpose)
                 )
         else:

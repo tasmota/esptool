@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 #
-# This file describes eFuses for ESP32-S3 chip
+# This file describes eFuses for ESP32-C6 chip
 #
-# SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2022 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -69,9 +69,9 @@ class EspEfuses(base_fields.EspEfusesBase):
         self._esp = esp
         self.debug = debug
         self.do_not_confirm = do_not_confirm
-        if esp.CHIP_NAME != "ESP32-S3":
+        if esp.CHIP_NAME != "ESP32-C6":
             raise esptool.FatalError(
-                "Expected the 'esp' param for ESP32-S3 chip but got for '%s'."
+                "Expected the 'esp' param for ESP32-C6 chip but got for '%s'."
                 % (esp.CHIP_NAME)
             )
         if not skip_connect:
@@ -107,19 +107,13 @@ class EspEfuses(base_fields.EspEfusesBase):
                 for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES
             ]
         else:
-            if self["BLK_VERSION_MAJOR"].get() == 1:
+            if self["BLOCK2_VERSION"].get() == 1:
                 self.efuses += [
                     EfuseField.from_tuple(
                         self, self.Fields.get(efuse), self.Fields.get(efuse).class_type
                     )
                     for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES
                 ]
-            self.efuses += [
-                EfuseField.from_tuple(
-                    self, self.Fields.get(efuse), self.Fields.get(efuse).class_type
-                )
-                for efuse in self.Fields.CALC
-            ]
 
     def __getitem__(self, efuse_name):
         """Return the efuse field with the given name"""
@@ -183,7 +177,7 @@ class EspEfuses(base_fields.EspEfusesBase):
     def wait_efuse_idle(self):
         deadline = time.time() + self.REGS.EFUSE_BURN_TIMEOUT
         while time.time() < deadline:
-            # if self.read_reg(self.EFUSE_CMD_REG) == 0:
+            # if self.read_reg(self.REGS.EFUSE_CMD_REG) == 0:
             if self.read_reg(self.REGS.EFUSE_STATUS_REG) & 0x7 == 1:
                 return
         raise esptool.FatalError(
@@ -203,44 +197,10 @@ class EspEfuses(base_fields.EspEfusesBase):
         self.write_reg(self.REGS.EFUSE_CONF_REG, self.REGS.EFUSE_READ_OP_CODE)
         # need to add a delay after triggering EFUSE_READ_CMD, as ROM loader checks some
         # efuse registers after each command is completed
-        # if ENABLE_SECURITY_DOWNLOAD or DIS_DOWNLOAD_MODE is enabled by the current cmd, then we need to try to reconnect to the chip.
-        try:
-            self.write_reg(
-                self.REGS.EFUSE_CMD_REG, self.REGS.EFUSE_READ_CMD, delay_after_us=1000
-            )
-            self.wait_efuse_idle()
-        except esptool.FatalError:
-            secure_download_mode_before = self._esp.secure_download_mode
-
-            try:
-                self._esp = self.reconnect_chip(self._esp)
-            except esptool.FatalError:
-                print("Can not re-connect to the chip")
-                if not self["DIS_DOWNLOAD_MODE"].get() and self[
-                    "DIS_DOWNLOAD_MODE"
-                ].get(from_read=False):
-                    print(
-                        "This is the correct behavior as we are actually burning "
-                        "DIS_DOWNLOAD_MODE which disables the connection to the chip"
-                    )
-                    print("DIS_DOWNLOAD_MODE is enabled")
-                    print("Successful")
-                    exit(0)  # finish without errors
-                raise
-
-            print("Established a connection with the chip")
-            if self._esp.secure_download_mode and not secure_download_mode_before:
-                print("Secure download mode is enabled")
-                if not self["ENABLE_SECURITY_DOWNLOAD"].get() and self[
-                    "ENABLE_SECURITY_DOWNLOAD"
-                ].get(from_read=False):
-                    print(
-                        "espefuse tool can not continue to work in Secure download mode"
-                    )
-                    print("ENABLE_SECURITY_DOWNLOAD is enabled")
-                    print("Successful")
-                    exit(0)  # finish without errors
-            raise
+        self.write_reg(
+            self.REGS.EFUSE_CMD_REG, self.REGS.EFUSE_READ_CMD, delay_after_us=1000
+        )
+        self.wait_efuse_idle()
 
     def set_efuse_timing(self):
         """Set timing registers for burning efuses"""
@@ -257,8 +217,6 @@ class EspEfuses(base_fields.EspEfusesBase):
 
     def get_coding_scheme_warnings(self, silent=False):
         """Check if the coding scheme has detected any errors."""
-        old_addr_reg = 0
-        reg_value = 0
         ret_fail = False
         for block in self.blocks:
             if block.id == 0:
@@ -275,16 +233,20 @@ class EspEfuses(base_fields.EspEfusesBase):
                 block.num_errors = block.err_bitarray.count(True)
                 block.fail = block.num_errors != 0
             else:
-                addr_reg, err_num_mask, err_num_offs, fail_bit = self.REGS.BLOCK_ERRORS[
-                    block.id
-                ]
-                if err_num_mask is None or err_num_offs is None or fail_bit is None:
-                    continue
-                if addr_reg != old_addr_reg:
-                    old_addr_reg = addr_reg
-                    reg_value = self.read_reg(addr_reg)
-                block.fail = reg_value & (1 << fail_bit) != 0
-                block.num_errors = (reg_value >> err_num_offs) & err_num_mask
+                addr_reg_f, fail_bit = self.REGS.BLOCK_FAIL_BIT[block.id]
+                if fail_bit is None:
+                    block.fail = False
+                else:
+                    block.fail = self.read_reg(addr_reg_f) & (1 << fail_bit) != 0
+
+                addr_reg_n, num_mask, num_offs = self.REGS.BLOCK_NUM_ERRORS[block.id]
+                if num_mask is None or num_offs is None:
+                    block.num_errors = 0
+                else:
+                    block.num_errors = (
+                        self.read_reg(addr_reg_n) >> num_offs
+                    ) & num_mask
+
             ret_fail |= block.fail
             if not silent and (block.fail or block.num_errors):
                 print(
@@ -296,18 +258,8 @@ class EspEfuses(base_fields.EspEfusesBase):
         return ret_fail
 
     def summary(self):
-        if self["VDD_SPI_FORCE"].get() == 0:
-            output = "Flash voltage (VDD_SPI) determined by GPIO45 on reset "
-            "(GPIO45=High: VDD_SPI pin is powered from internal 1.8V LDO\n"
-            output += "GPIO45=Low or NC: VDD_SPI pin is powered directly from "
-            "VDD3P3_RTC_IO via resistor Rspi. Typically this voltage is 3.3 V)."
-        elif self["VDD_SPI_XPD"].get() == 0:
-            output = "Flash voltage (VDD_SPI) internal regulator disabled by efuse."
-        elif self["VDD_SPI_TIEH"].get() == 0:
-            output = "Flash voltage (VDD_SPI) set to 1.8V by efuse."
-        else:
-            output = "Flash voltage (VDD_SPI) set to 3.3V by efuse."
-        return output
+        # TODO add support set_flash_voltage - "Flash voltage (VDD_SPI)"
+        return ""
 
 
 class EfuseField(base_fields.EfuseFieldBase):
@@ -318,7 +270,6 @@ class EfuseField(base_fields.EfuseFieldBase):
             "keypurpose": EfuseKeyPurposeField,
             "t_sensor": EfuseTempSensor,
             "adc_tp": EfuseAdcPointCalibration,
-            "wafer": EfuseWafer,
         }.get(type_class, EfuseField)(parent, efuse_tuple)
 
     def get_info(self):
@@ -335,16 +286,6 @@ class EfuseField(base_fields.EfuseFieldBase):
             if name is not None:
                 output += "\n  Purpose: %s\n " % (self.parent[name].get())
         return output
-
-
-class EfuseWafer(EfuseField):
-    def get(self, from_read=True):
-        hi_bits = self.parent["WAFER_VERSION_MINOR_HI"].get(from_read)
-        lo_bits = self.parent["WAFER_VERSION_MINOR_LO"].get(from_read)
-        return (hi_bits << 3) + lo_bits
-
-    def save(self, new_value):
-        raise esptool.FatalError("Burning %s is not supported" % self.name)
 
 
 class EfuseTempSensor(EfuseField):
@@ -415,7 +356,7 @@ class EfuseMacField(EfuseField):
             print_field(self, bitarray_mac)
             super(EfuseMacField, self).save(new_value)
         else:
-            # Writing the BLOCK1 (MAC_SPI_8M_0) default MAC is not sensible,
+            # Writing the BLOCK1 (MAC_SPI_8M_0) default MAC is not possible,
             # as it's written in the factory.
             raise esptool.FatalError("Writing Factory MAC address is not supported")
 
@@ -425,8 +366,6 @@ class EfuseKeyPurposeField(EfuseField):
     KEY_PURPOSES = [
         ("USER",                         0,  None,       None,      "no_need_rd_protect"),   # User purposes (software-only use)
         ("RESERVED",                     1,  None,       None,      "no_need_rd_protect"),   # Reserved
-        ("XTS_AES_256_KEY_1",            2,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_256_KEY_1 (flash/PSRAM encryption)
-        ("XTS_AES_256_KEY_2",            3,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_256_KEY_2 (flash/PSRAM encryption)
         ("XTS_AES_128_KEY",              4,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_128_KEY (flash/PSRAM encryption)
         ("HMAC_DOWN_ALL",                5,  None,       None,      "need_rd_protect"),      # HMAC Downstream mode
         ("HMAC_DOWN_JTAG",               6,  None,       None,      "need_rd_protect"),      # JTAG soft enable key (uses HMAC Downstream mode)
@@ -435,10 +374,8 @@ class EfuseKeyPurposeField(EfuseField):
         ("SECURE_BOOT_DIGEST0",          9,  "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST0 (Secure Boot key digest)
         ("SECURE_BOOT_DIGEST1",          10, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST1 (Secure Boot key digest)
         ("SECURE_BOOT_DIGEST2",          11, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST2 (Secure Boot key digest)
-        ("XTS_AES_256_KEY",              -1, "VIRTUAL",  None,      "no_need_rd_protect"),   # Virtual purpose splits to XTS_AES_256_KEY_1 and XTS_AES_256_KEY_2
     ]
 # fmt: on
-
     KEY_PURPOSES_NAME = [name[0] for name in KEY_PURPOSES]
     DIGEST_KEY_PURPOSES = [name[0] for name in KEY_PURPOSES if name[2] == "DIGEST"]
 

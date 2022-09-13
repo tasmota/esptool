@@ -16,6 +16,7 @@ from .targets import (
     ESP32C2ROM,
     ESP32C3ROM,
     ESP32C6BETAROM,
+    ESP32C6ROM,
     ESP32H2BETA1ROM,
     ESP32H2BETA2ROM,
     ESP32ROM,
@@ -33,7 +34,7 @@ def align_file_position(f, size):
     f.seek(align, 1)
 
 
-def LoadFirmwareImage(chip, filename):
+def LoadFirmwareImage(chip, image_file):
     """
     Load a firmware image. Can be for any supported SoC.
 
@@ -43,8 +44,9 @@ def LoadFirmwareImage(chip, filename):
     Returns a BaseFirmwareImage subclass, either ESP8266ROMFirmwareImage (v1)
     or ESP8266V2FirmwareImage (v2).
     """
-    chip = re.sub(r"[-()]", "", chip.lower())
-    with open(filename, "rb") as f:
+
+    def select_image_class(f, chip):
+        chip = re.sub(r"[-()]", "", chip.lower())
         if chip != "esp8266":
             return {
                 "esp32": ESP32FirmwareImage,
@@ -56,6 +58,7 @@ def LoadFirmwareImage(chip, filename):
                 "esp32h2beta1": ESP32H2BETA1FirmwareImage,
                 "esp32h2beta2": ESP32H2BETA2FirmwareImage,
                 "esp32c2": ESP32C2FirmwareImage,
+                "esp32c6": ESP32C6FirmwareImage,
             }[chip](f)
         else:  # Otherwise, ESP8266 so look at magic to determine the image type
             magic = ord(f.read(1))
@@ -66,6 +69,11 @@ def LoadFirmwareImage(chip, filename):
                 return ESP8266V2FirmwareImage(f)
             else:
                 raise FatalError("Invalid image magic number: %d" % magic)
+
+    if isinstance(image_file, str):
+        with open(image_file, "rb") as f:
+            return select_image_class(f, chip)
+    return select_image_class(image_file, chip)
 
 
 class ImageSegment(object):
@@ -619,6 +627,14 @@ class ESP32FirmwareImage(BaseFirmwareImage):
                 if not self.is_flash_addr(s.addr)
             ]
 
+            # Patch to support 761 union bus memmap     // TODO: ESPTOOL-512
+            # move ".flash.appdesc" segment to the top of the flash segment
+            for segment in flash_segments:
+                if segment.name == ".flash.appdesc":
+                    flash_segments.remove(segment)
+                    flash_segments.insert(0, segment)
+                    break
+
             # check for multiple ELF sections that are mapped in the same
             # flash mapping region. This is usually a sign of a broken linker script,
             # but if you have a legitimate use case then let us know
@@ -994,11 +1010,31 @@ class ESP32C2FirmwareImage(ESP32FirmwareImage):
 
     def set_mmu_page_size(self, size):
         if size not in [16384, 32768, 65536]:
-            raise FatalError("{} is not a valid page size.".format(size))
+            raise FatalError(
+                "{} bytes is not a valid ESP32-C2 page size, "
+                "select from 64KB, 32KB, 16KB.".format(size)
+            )
         self.IROM_ALIGN = size
 
 
 ESP32C2ROM.BOOTLOADER_IMAGE = ESP32C2FirmwareImage
+
+
+class ESP32C6FirmwareImage(ESP32FirmwareImage):
+    """ESP32C6 Firmware Image almost exactly the same as ESP32FirmwareImage"""
+
+    ROM_LOADER = ESP32C6ROM
+
+    def set_mmu_page_size(self, size):
+        if size not in [8192, 16384, 32768, 65536]:
+            raise FatalError(
+                "{} bytes is not a valid ESP32-C6 page size, "
+                "select from 64KB, 32KB, 16KB, 8KB.".format(size)
+            )
+        self.IROM_ALIGN = size
+
+
+ESP32C6ROM.BOOTLOADER_IMAGE = ESP32C6FirmwareImage
 
 
 class ELFFile(object):

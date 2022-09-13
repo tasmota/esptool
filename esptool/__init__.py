@@ -328,7 +328,7 @@ def main(argv=None, esp=None):
     )
     parser_write_flash.add_argument(
         "--force",
-        help="Force write even if Secure Boot is enabled. Use with caution!",
+        help="Force write, skip security and compatibility checks. Use with caution!",
         action="store_true",
     )
 
@@ -447,7 +447,7 @@ def main(argv=None, esp=None):
     parser_elf2image.add_argument(
         "--flash-mmu-page-size",
         help="Change flash MMU page size.",
-        choices=["64KB", "32KB", "16KB"],
+        choices=["64KB", "32KB", "16KB", "8KB"],
     )
 
     add_spi_flash_subparsers(parser_elf2image, allow_keep=False, auto_detect=False)

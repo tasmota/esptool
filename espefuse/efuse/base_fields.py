@@ -458,6 +458,13 @@ class EspEfusesBase(object):
     def efuse_controller_setup(self):
         pass
 
+    def reconnect_chip(self, esp):
+        print("Re-connecting...")
+        baudrate = esp._port.baudrate
+        port = esp._port.port
+        esp._port.close()
+        return esptool.cmds.detect_chip(port, baudrate)
+
     def get_index_block_by_name(self, name):
         for block in self.blocks:
             if block.name == name or name in block.alias:
@@ -653,6 +660,9 @@ class EfuseFieldBase(EfuseProtectBase):
         self.save_to_block(bitarray_field)
 
     def update(self, bit_array_block):
+        if self.word is None or self.pos is None:
+            self.bitarray.overwrite(self.convert_to_bitstring(self.get()), pos=0)
+            return
         field_len = self.bitarray.len
         bit_array_block.pos = bit_array_block.length - (
             self.word * 32 + self.pos + field_len

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 #
-# This file describes eFuses controller for ESP32-S3(beta2) chip
+# This file describes eFuses controller for ESP32-C6 chip
 #
-# SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2022 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -15,7 +15,7 @@ from ..emulate_efuse_controller_base import EmulateEfuseControllerBase, FatalErr
 class EmulateEfuseController(EmulateEfuseControllerBase):
     """The class for virtual efuse operation. Using for HOST_TEST."""
 
-    CHIP_NAME = "ESP32-S3(beta2)"
+    CHIP_NAME = "ESP32-C6"
     mem = None
     debug = False
     Blocks = EfuseDefineBlocks
@@ -28,11 +28,8 @@ class EmulateEfuseController(EmulateEfuseControllerBase):
 
     """ esptool method start >>"""
 
-    def get_major_chip_version(self):
-        return 0
-
-    def get_minor_chip_version(self):
-        return 2
+    def get_chip_description(self):
+        return ""
 
     def get_crystal_freq(self):
         return 40  # MHz (common for all chips)

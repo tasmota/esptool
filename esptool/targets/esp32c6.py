@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2014-2022 Fredrik Ahlberg, Angus Gratton,
+# SPDX-FileCopyrightText: 2022 Fredrik Ahlberg, Angus Gratton,
 # Espressif Systems (Shanghai) CO LTD, other contributors as noted.
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,36 +9,25 @@ from .esp32 import ESP32ROM
 from ..util import FatalError, NotImplementedInROMError
 
 
-class ESP32C3ROM(ESP32ROM):
-    CHIP_NAME = "ESP32-C3"
-    IMAGE_CHIP_ID = 5
+class ESP32C6ROM(ESP32ROM):
+    CHIP_NAME = "ESP32-C6"
+    IMAGE_CHIP_ID = 13
 
     FPGA_SLOW_BOOT = False
 
     IROM_MAP_START = 0x42000000
     IROM_MAP_END = 0x42800000
-    DROM_MAP_START = 0x3C000000
-    DROM_MAP_END = 0x3C800000
-
-    SPI_REG_BASE = 0x60002000
-    SPI_USR_OFFS = 0x18
-    SPI_USR1_OFFS = 0x1C
-    SPI_USR2_OFFS = 0x20
-    SPI_MOSI_DLEN_OFFS = 0x24
-    SPI_MISO_DLEN_OFFS = 0x28
-    SPI_W0_OFFS = 0x58
+    DROM_MAP_START = 0x42800000
+    DROM_MAP_END = 0x43000000
 
     BOOTLOADER_FLASH_OFFSET = 0x0
 
-    # Magic value for ESP32C3 eco 1+2 and ESP32C3 eco3 respectivly
-    CHIP_DETECT_MAGIC_VALUE = [0x6921506F, 0x1B31506F]
+    # Magic value for ESP32C6
+    CHIP_DETECT_MAGIC_VALUE = [0x1EA0206F]
 
     UART_DATE_REG_ADDR = 0x60000000 + 0x7C
 
-    UART_CLKDIV_REG = 0x60000014
-
-    EFUSE_BASE = 0x60008800
-    EFUSE_BLOCK1_ADDR = EFUSE_BASE + 0x044
+    EFUSE_BASE = 0x600B0800
     MAC_EFUSE_REG = EFUSE_BASE + 0x044
 
     EFUSE_RD_REG_BASE = EFUSE_BASE + 0x030  # BLOCK0 read base address
@@ -73,51 +62,50 @@ class ESP32C3ROM(ESP32ROM):
 
     MEMORY_MAP = [
         [0x00000000, 0x00010000, "PADDING"],
-        [0x3C000000, 0x3C800000, "DROM"],
-        [0x3FC80000, 0x3FCE0000, "DRAM"],
-        [0x3FC88000, 0x3FD00000, "BYTE_ACCESSIBLE"],
-        [0x3FF00000, 0x3FF20000, "DROM_MASK"],
-        [0x40000000, 0x40060000, "IROM_MASK"],
+        [0x42800000, 0x43000000, "DROM"],
+        [0x40800000, 0x40880000, "DRAM"],
+        [0x40800000, 0x40880000, "BYTE_ACCESSIBLE"],
+        [0x4004AC00, 0x40050000, "DROM_MASK"],
+        [0x40000000, 0x4004AC00, "IROM_MASK"],
         [0x42000000, 0x42800000, "IROM"],
-        [0x4037C000, 0x403E0000, "IRAM"],
-        [0x50000000, 0x50002000, "RTC_IRAM"],
-        [0x50000000, 0x50002000, "RTC_DRAM"],
+        [0x40800000, 0x40880000, "IRAM"],
+        [0x50000000, 0x50004000, "RTC_IRAM"],
+        [0x50000000, 0x50004000, "RTC_DRAM"],
         [0x600FE000, 0x60100000, "MEM_INTERNAL2"],
     ]
 
     def get_pkg_version(self):
         num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 21) & 0x07
+        block1_addr = self.EFUSE_BASE + 0x044
+        word3 = self.read_reg(block1_addr + (4 * num_word))
+        pkg_version = (word3 >> 21) & 0x0F
+        return pkg_version
 
-    def get_minor_chip_version(self):
-        hi_num_word = 5
-        hi = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * hi_num_word)) >> 23) & 0x01
-        low_num_word = 3
-        low = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * low_num_word)) >> 18) & 0x07
-        return (hi << 3) + low
-
-    def get_major_chip_version(self):
-        num_word = 5
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 24) & 0x03
+    def get_chip_revision(self):
+        # reads WAFER_VERSION field from EFUSE_RD_MAC_SPI_SYS_3_REG
+        block1_addr = self.EFUSE_BASE + 0x044
+        num_word = 3
+        pos = 18
+        return (self.read_reg(block1_addr + (4 * num_word)) & (0x7 << pos)) >> pos
 
     def get_chip_description(self):
         chip_name = {
-            0: "ESP32-C3",
-        }.get(self.get_pkg_version(), "unknown ESP32-C3")
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return f"{chip_name} (revision v{major_rev}.{minor_rev})"
+            0: "ESP32-C6",
+        }.get(self.get_pkg_version(), "unknown ESP32-C6")
+        chip_revision = self.get_chip_revision()
+
+        return "%s (revision %d)" % (chip_name, chip_revision)
 
     def get_chip_features(self):
-        return ["WiFi", "BLE"]
+        return ["WiFi 6", "BT 5"]
 
     def get_crystal_freq(self):
-        # ESP32C3 XTAL is fixed to 40MHz
+        # ESP32C6 XTAL is fixed to 40MHz
         return 40
 
     def override_vddsdio(self, new_voltage):
         raise NotImplementedInROMError(
-            "VDD_SDIO overrides are not supported for ESP32-C3"
+            "VDD_SDIO overrides are not supported for ESP32-C6"
         )
 
     def read_mac(self):
@@ -127,13 +115,7 @@ class ESP32C3ROM(ESP32ROM):
         return tuple(bitstring)
 
     def get_flash_crypt_config(self):
-        return None  # doesn't exist on ESP32-C3
-
-    def get_secure_boot_enabled(self):
-        return (
-            self.read_reg(self.EFUSE_SECURE_BOOT_EN_REG)
-            & self.EFUSE_SECURE_BOOT_EN_MASK
-        )
+        return None  # doesn't exist on ESP32-C6
 
     def get_key_block_purpose(self, key_block):
         if key_block < 0 or key_block > 5:
@@ -156,8 +138,8 @@ class ESP32C3ROM(ESP32ROM):
         return any(p == self.PURPOSE_VAL_XTS_AES128_KEY for p in purposes)
 
 
-class ESP32C3StubLoader(ESP32C3ROM):
-    """Access class for ESP32C3 stub loader, runs on top of ROM.
+class ESP32C6StubLoader(ESP32C6ROM):
+    """Access class for ESP32C6 stub loader, runs on top of ROM.
 
     (Basically the same as ESP32StubLoader, but different base class.
     Can possibly be made into a mixin.)
@@ -174,4 +156,4 @@ class ESP32C3StubLoader(ESP32C3ROM):
         self.flush_input()  # resets _slip_reader
 
 
-ESP32C3ROM.STUB_CLASS = ESP32C3StubLoader
+ESP32C6ROM.STUB_CLASS = ESP32C6StubLoader
