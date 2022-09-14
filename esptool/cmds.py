@@ -339,19 +339,48 @@ def write_flash(esp, args):
                     f"{argfile.name} is not an {esp.CHIP_NAME} image. "
                     "Use --force to flash anyway."
                 )
-            # In IDF, image.min_rev is set based on Kconfig option.
-            # For C3 chip, image.min_rev is the Minor revision
-            # while for the rest chips it is the Major revision.
-            if esp.CHIP_NAME == "ESP32-C3":
-                rev = esp.get_minor_chip_version()
+
+            # this logic below decides which min_rev to use, min_rev or min/max_rev_full
+            if image.max_rev_full == 0:  # image does not have max/min_rev_full fields
+                use_rev_full_fields = False
+            elif image.max_rev_full == 65535:  # image has default value of max_rev_full
+                if (
+                    image.min_rev_full == 0 and image.min_rev != 0
+                ):  # min_rev_full is not set, min_rev is used
+                    use_rev_full_fields = False
+                use_rev_full_fields = True
+            else:  # max_rev_full set to a version
+                use_rev_full_fields = True
+
+            if use_rev_full_fields:
+                rev = esp.get_chip_revision()
+                if rev < image.min_rev_full or rev > image.max_rev_full:
+                    error_str = f"{argfile.name} requires chip revision in range "
+                    error_str += (
+                        f"[v{image.min_rev_full // 100}.{image.min_rev_full % 100} - "
+                    )
+                    if image.max_rev_full == 65535:
+                        error_str += "max rev not set] "
+                    else:
+                        error_str += (
+                            f"v{image.max_rev_full // 100}.{image.max_rev_full % 100}] "
+                        )
+                    error_str += f"(this chip is revision v{rev // 100}.{rev % 100})"
+                    raise FatalError(f"{error_str}. Use --force to flash anyway.")
             else:
-                rev = esp.get_major_chip_version()
-            if rev < image.min_rev:
-                raise FatalError(
-                    f"{argfile.name} requires chip revision "
-                    f"{image.min_rev} or higher (this chip is revision {rev}). "
-                    "Use --force to flash anyway."
-                )
+                # In IDF, image.min_rev is set based on Kconfig option.
+                # For C3 chip, image.min_rev is the Minor revision
+                # while for the rest chips it is the Major revision.
+                if esp.CHIP_NAME == "ESP32-C3":
+                    rev = esp.get_minor_chip_version()
+                else:
+                    rev = esp.get_major_chip_version()
+                if rev < image.min_rev:
+                    raise FatalError(
+                        f"{argfile.name} requires chip revision "
+                        f"{image.min_rev} or higher (this chip is revision {rev}). "
+                        "Use --force to flash anyway."
+                    )
 
     # In case we have encrypted files to write,
     # we first do few sanity checks before actual flash
@@ -625,6 +654,7 @@ def image_info(args):
                     return key
             return None
 
+        print()
         title = "{} image header".format(args.chip.upper())
         print(title)
         print("=" * len(title))
@@ -683,7 +713,15 @@ def image_info(args):
                 )
             )
             print("Chip ID: {}".format(image.chip_id))
-            print("Minimal chip revision: {}".format(image.min_rev))
+            print(
+                "Minimal chip revision: "
+                f"v{image.min_rev_full // 100}.{image.min_rev_full % 100}, "
+                f"(legacy min_rev = {image.min_rev})"
+            )
+            print(
+                "Maximal chip revision: "
+                f"v{image.max_rev_full // 100}.{image.max_rev_full % 100}"
+            )
         print()
 
         # Segments overview
@@ -700,16 +738,19 @@ def image_info(args):
             "{}  {}  {}  {}  {}".format("-" * 7, "-" * 7, "-" * 10, "-" * 10, "-" * 12)
         )
         format_str = "{:7}  {:#07x}  {:#010x}  {:#010x}  {}"
+        app_desc = None
         for idx, seg in enumerate(image.segments, start=1):
             segs = seg.get_memory_type(image)
             seg_name = ", ".join(segs)
+            if "DROM" in segs:  # The DROM segment starts with the esp_app_desc_t struct
+                app_desc = seg.data[:256]
             print(
                 format_str.format(idx, len(seg.data), seg.addr, seg.file_offs, seg_name)
             )
         print()
 
         # Footer
-        title = "Image footer"
+        title = f"{args.chip.upper()} image footer"
         print(title)
         print("=" * len(title))
         calc_checksum = image.calculate_checksum()
@@ -726,12 +767,39 @@ def image_info(args):
             if image.append_digest:
                 is_valid = image.stored_digest == image.calc_digest
                 digest_msg = "{} ({})".format(
-                    hexify(image.calc_digest).lower(),
+                    hexify(image.calc_digest, uppercase=False),
                     "valid" if is_valid else "invalid",
                 )
                 print("Validation hash: {}".format(digest_msg))
         except AttributeError:
             pass  # ESP8266 image has no append_digest field
+
+        if app_desc:
+            APP_DESC_STRUCT_FMT = "<II" + "8s" + "32s32s16s16s32s32s" + "80s"
+            (
+                magic_word,
+                secure_version,
+                reserv1,
+                version,
+                project_name,
+                time,
+                date,
+                idf_ver,
+                app_elf_sha256,
+                reserv2,
+            ) = struct.unpack(APP_DESC_STRUCT_FMT, app_desc)
+
+            if magic_word == 0xABCD5432:
+                print()
+                title = "Application information"
+                print(title)
+                print("=" * len(title))
+                print(f'Project name: {project_name.decode("utf-8")}')
+                print(f'App version: {version.decode("utf-8")}')
+                print(f'Compile time: {date.decode("utf-8")} {time.decode("utf-8")}')
+                print(f"ELF file SHA256: {hexify(app_elf_sha256, uppercase=False)}")
+                print(f'ESP-IDF: {idf_ver.decode("utf-8")}')
+                print(f"Secure version: {secure_version}")
 
     with open(args.filename, "rb") as f:
         # magic number
@@ -806,7 +874,7 @@ def image_info(args):
         if image.append_digest:
             is_valid = image.stored_digest == image.calc_digest
             digest_msg = "{} ({})".format(
-                hexify(image.calc_digest).lower(),
+                hexify(image.calc_digest, uppercase=False),
                 "valid" if is_valid else "invalid",
             )
             print("Validation Hash: {}".format(digest_msg))
@@ -844,6 +912,8 @@ def elf2image(args):
         if args.secure_pad_v2:
             image.secure_pad = "2"
         image.min_rev = args.min_rev
+        image.min_rev_full = args.min_rev_full
+        image.max_rev_full = args.max_rev_full
         image.append_digest = args.append_digest
     elif args.version == "1":  # ESP8266
         image = ESP8266ROMFirmwareImage()

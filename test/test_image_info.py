@@ -97,7 +97,8 @@ class ImageInfoTests(unittest.TestCase):
             "cs0_drv: 0x0, hd_drv: 0x0, wp_drv: 0x0" in out,
             "Wrong flash pins drive settings",
         )
-        self.assertTrue("Minimal chip revision: 0" in out, "Wrong min revision")
+        self.assertTrue("Minimal chip revision: v0.0" in out, "Wrong min revision")
+        self.assertTrue("Maximal chip revision: v0.0" in out, "Wrong min revision")
 
         # Segments
         self.assertTrue(
@@ -165,6 +166,23 @@ class ImageInfoTests(unittest.TestCase):
     def test_invalid_image_type_detection(self):
         # Invalid image
         self.run_image_info("auto", "one_kb.bin", "2")
+
+    def test_application_info(self):
+        out = self.run_image_info("auto", "esp_idf_blink_esp32s2.bin", "2")
+        self.assertTrue("Application information" in out)
+        self.assertTrue("Project name: blink" in out)
+        self.assertTrue("App version: qa-test-v5.0-20220830-4-g4532e6" in out)
+        self.assertTrue("Secure version: 0" in out)
+        self.assertTrue("Compile time: Sep 13 2022" in out)
+        self.assertTrue("19:46:07" in out)
+        self.assertTrue("3059e6b55a965865febd28fa9f6028ad5" in out)
+        self.assertTrue("cd0dab311febb0a3ea79eaa223ac2b0" in out)
+        self.assertTrue("ESP-IDF: v5.0-beta1-427-g4532e6e0b2-dirt" in out)
+        # No application info in image
+        out = self.run_image_info("auto", "bootloader_esp32.bin", "2")
+        self.assertFalse("Application information" in out)
+        out = self.run_image_info("auto", NODEMCU_FILE, "2")
+        self.assertFalse("Application information" in out)
 
 
 if __name__ == "__main__":
