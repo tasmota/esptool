@@ -30,7 +30,7 @@ __all__ = [
     "write_mem",
 ]
 
-__version__ = "4.2.1"
+__version__ = "4.4"
 
 import argparse
 import inspect
@@ -328,7 +328,7 @@ def main(argv=None, esp=None):
     )
     parser_write_flash.add_argument(
         "--force",
-        help="Force write even if Secure Boot is enabled. Use with caution!",
+        help="Force write, skip security and compatibility checks. Use with caution!",
         action="store_true",
     )
 
@@ -403,13 +403,31 @@ def main(argv=None, esp=None):
         default="1",
     )
     parser_elf2image.add_argument(
+        # it kept for compatibility
+        # Minimum chip revision (deprecated, consider using --min-rev-full)
         "--min-rev",
         "-r",
-        help="Minimum chip revision",
+        help=argparse.SUPPRESS,
         type=int,
         choices=range(256),
         metavar="{0, ... 255}",
         default=0,
+    )
+    parser_elf2image.add_argument(
+        "--min-rev-full",
+        help="Minimal chip revision (in format: major * 100 + minor)",
+        type=int,
+        choices=range(65536),
+        metavar="{0, ... 65535}",
+        default=0,
+    )
+    parser_elf2image.add_argument(
+        "--max-rev-full",
+        help="Maximal chip revision (in format: major * 100 + minor)",
+        type=int,
+        choices=range(65536),
+        metavar="{0, ... 65535}",
+        default=65535,
     )
     parser_elf2image.add_argument(
         "--secure-pad",
@@ -447,7 +465,7 @@ def main(argv=None, esp=None):
     parser_elf2image.add_argument(
         "--flash-mmu-page-size",
         help="Change flash MMU page size.",
-        choices=["64KB", "32KB", "16KB"],
+        choices=["64KB", "32KB", "16KB", "8KB"],
     )
 
     add_spi_flash_subparsers(parser_elf2image, allow_keep=False, auto_detect=False)

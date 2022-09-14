@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 #
 # HOST_TEST for espefuse.py
-# [support esp32, esp32s2, esp32s3beta2, esp32s3, esp32c3, esp32h2beta1, esp32c2]
+# [support
+#  esp32, esp32s2, esp32s3beta2, esp32s3, esp32c3, esp32h2beta1, esp32c2, esp32c6]
 #
 # How to use it:
 #
@@ -47,6 +48,7 @@ support_list_chips = [
     "esp32c3",
     "esp32h2beta1",
     "esp32c2",
+    "esp32c6",
 ]
 
 try:
@@ -147,6 +149,7 @@ class EfuseTestCase(unittest.TestCase):
                 self.assertIn(check_msg, output)
             if returncode:
                 print(output)
+                print(cmd)
             self.assertEqual(ret_code, returncode)
             return output
         except subprocess.CalledProcessError as error:
@@ -329,7 +332,7 @@ class TestWriteProtectionCommands(EfuseTestCase):
     def test_write_protect_efuse(self):
         self.espefuse_py("write_protect_efuse -h")
         if chip_target == "esp32":
-            efuse_lists = """WR_DIS RD_DIS CODING_SCHEME CHIP_VERSION CHIP_PACKAGE
+            efuse_lists = """WR_DIS RD_DIS CODING_SCHEME
                            XPD_SDIO_FORCE XPD_SDIO_REG XPD_SDIO_TIEH SPI_PAD_CONFIG_CLK
                            FLASH_CRYPT_CNT UART_DOWNLOAD_DIS FLASH_CRYPT_CONFIG
                            ADC_VREF BLOCK1 BLOCK2 BLOCK3"""
@@ -346,26 +349,16 @@ class TestWriteProtectionCommands(EfuseTestCase):
                            SECURE_BOOT_KEY_REVOKE2 KEY_PURPOSE_0 KEY_PURPOSE_1
                            KEY_PURPOSE_2 KEY_PURPOSE_3 KEY_PURPOSE_4 KEY_PURPOSE_5
                            SECURE_BOOT_EN SECURE_BOOT_AGGRESSIVE_REVOKE FLASH_TPUW
-                           DIS_DOWNLOAD_MODE DIS_DIRECT_BOOT
-                           DIS_USB_SERIAL_JTAG_ROM_PRINT
-                           DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE ENABLE_SECURITY_DOWNLOAD
+                           DIS_DOWNLOAD_MODE
+                           ENABLE_SECURITY_DOWNLOAD
                            UART_PRINT_CONTROL MAC SPI_PAD_CONFIG_CLK SPI_PAD_CONFIG_Q
                            SPI_PAD_CONFIG_D SPI_PAD_CONFIG_CS SPI_PAD_CONFIG_HD
                            SPI_PAD_CONFIG_WP SPI_PAD_CONFIG_DQS SPI_PAD_CONFIG_D4
                            SPI_PAD_CONFIG_D5 SPI_PAD_CONFIG_D6 SPI_PAD_CONFIG_D7
-                           WAFER_VERSION PKG_VERSION BLOCK1_VERSION OPTIONAL_UNIQUE_ID
-                           BLOCK2_VERSION BLOCK_USR_DATA BLOCK_KEY0 BLOCK_KEY1
+                           OPTIONAL_UNIQUE_ID
+                           BLOCK_USR_DATA BLOCK_KEY0 BLOCK_KEY1
                            BLOCK_KEY2 BLOCK_KEY3 BLOCK_KEY4 BLOCK_KEY5"""
             efuse_lists2 = "RD_DIS DIS_ICACHE"
-        if chip_target == "esp32s2":
-            replace_rule = {
-                # New bit definition after esp32c3    Old defintion in esp32s2
-                "DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE": "DIS_USB_DOWNLOAD_MODE",
-                "DIS_DIRECT_BOOT": "DIS_LEGACY_SPI_BOOT",
-                "DIS_USB_SERIAL_JTAG_ROM_PRINT": "UART_PRINT_CHANNEL",
-            }
-            for old_name in replace_rule:
-                efuse_lists = efuse_lists.replace(old_name, replace_rule[old_name])
         self.espefuse_py("write_protect_efuse {}".format(efuse_lists))
         output = self.espefuse_py("write_protect_efuse {}".format(efuse_lists2))
         self.assertEqual(2, output.count("is already write protected"))
@@ -443,6 +436,9 @@ class TestBurnCustomMacCommands(EfuseTestCase):
 )
 @unittest.skipIf(
     chip_target == "esp32c3", "TODO: add support set_flash_voltage for ESP32-C3"
+)
+@unittest.skipIf(
+    chip_target == "esp32c6", "TODO: add support set_flash_voltage for ESP32-C6"
 )
 class TestSetFlashVoltageCommands(EfuseTestCase):
     def test_set_flash_voltage_1_8v(self):
@@ -630,7 +626,7 @@ class TestBurnEfuseCommands(EfuseTestCase):
         self.assertIn(
             "(Override SD_CMD pad (GPIO11/SPICS0)) 0b00000 -> 0b11111", output
         )
-        self.assertIn("BURN BLOCK0  - OK (write block == read block)", output)
+        self.assertIn("BURN BLOCK0  - OK (all write block bits are set)", output)
 
     def test_burn_mac_custom_efuse(self):
         crc_msg = "(OK)"
@@ -701,9 +697,13 @@ class TestBurnEfuseCommands(EfuseTestCase):
             self.assertIn(
                 "= 68 e1 ea d6 26 3a 84 8f 69 5f 14 c9 5a ad 28 23 R/W", output
             )
+            efuse_from_blk2 = "BLK_VERSION_MAJOR"
+            if chip_target == "esp32s2":
+                efuse_from_blk2 = "BLK_VERSION_MINOR"
+            if chip_target == "esp32h2beta1":
+                efuse_from_blk2 = "BLOCK2_VERSION"
             self.espefuse_py(
-                "burn_efuse \
-                              BLOCK2_VERSION  1",
+                "burn_efuse %s  1" % efuse_from_blk2,
                 check_msg="Burn into BLOCK_SYS_DATA is forbidden "
                 "(RS coding scheme does not allow this).",
                 ret_code=2,
@@ -867,7 +867,15 @@ class TestBurnKeyCommands(EfuseTestCase):
 
     @unittest.skipUnless(
         chip_target
-        in ["esp32s2", "esp32s3", "esp32s3beta1", "esp32c3", "esp32h2", "esp32h2beta1"],
+        in [
+            "esp32s2",
+            "esp32s3",
+            "esp32s3beta1",
+            "esp32c3",
+            "esp32h2",
+            "esp32h2beta1",
+            "esp32c6",
+        ],
         "Only chip with 6 keys",
     )
     def test_burn_key_with_6_keys(self):
@@ -875,7 +883,7 @@ class TestBurnKeyCommands(EfuseTestCase):
                BLOCK_KEY0 images/efuse/256bit   XTS_AES_256_KEY_1 \
                BLOCK_KEY1 images/efuse/256bit_1 XTS_AES_256_KEY_2 \
                BLOCK_KEY2 images/efuse/256bit_2 XTS_AES_128_KEY"
-        if chip_target == "esp32c3":
+        if chip_target in ["esp32c3", "esp32c6"]:
             cmd = cmd.replace("XTS_AES_256_KEY_1", "XTS_AES_128_KEY")
             cmd = cmd.replace("XTS_AES_256_KEY_2", "XTS_AES_128_KEY")
         self.espefuse_py(cmd + " --no-read-protect --no-write-protect")
@@ -1120,7 +1128,15 @@ class TestBurnBlockDataCommands(EfuseTestCase):
 
     @unittest.skipUnless(
         chip_target
-        in ["esp32s2", "esp32s3", "esp32s3beta1", "esp32c3", "esp32h2", "esp32h2beta1"],
+        in [
+            "esp32s2",
+            "esp32s3",
+            "esp32s3beta1",
+            "esp32c3",
+            "esp32h2",
+            "esp32h2beta1",
+            "esp32c6",
+        ],
         "Only chip with 6 keys",
     )
     def test_burn_block_data_with_6_keys(self):
@@ -1253,7 +1269,15 @@ class TestBurnBlockDataCommands(EfuseTestCase):
 
     @unittest.skipUnless(
         chip_target
-        in ["esp32s2", "esp32s3", "esp32s3beta1", "esp32c3", "esp32h2", "esp32h2beta1"],
+        in [
+            "esp32s2",
+            "esp32s3",
+            "esp32s3beta1",
+            "esp32c3",
+            "esp32h2",
+            "esp32h2beta1",
+            "esp32c6",
+        ],
         "Only chip with 6 keys",
     )
     def test_burn_block_data_with_offset_6_keys(self):
@@ -1338,7 +1362,7 @@ class TestBurnKeyDigestCommandsEsp32(EfuseTestCase):
     def test_burn_key_digest(self):
         self.espefuse_py("burn_key_digest -h")
         esp = self.get_esptool()
-        if "revision 3" in esp.get_chip_description():
+        if esp.get_chip_revision() >= 300:
             self.espefuse_py(
                 "burn_key_digest secure_images/rsa_secure_boot_signing_key.pem"
             )
@@ -1448,7 +1472,15 @@ class TestBurnKeyDigestCommandsEsp32C2(EfuseTestCase):
 
 @unittest.skipUnless(
     chip_target
-    in ["esp32s2", "esp32s3", "esp32s3beta1", "esp32c3", "esp32h2", "esp32h2beta1"],
+    in [
+        "esp32s2",
+        "esp32s3",
+        "esp32s3beta1",
+        "esp32c3",
+        "esp32h2",
+        "esp32h2beta1",
+        "esp32c6",
+    ],
     "Supports 6 key blocks",
 )
 class TestBurnKeyDigestCommands(EfuseTestCase):
@@ -1563,7 +1595,15 @@ class TestBurnBitCommands(EfuseTestCase):
 
     @unittest.skipUnless(
         chip_target
-        in ["esp32s2", "esp32s3", "esp32s3beta1", "esp32c3", "esp32h2", "esp32h2beta1"],
+        in [
+            "esp32s2",
+            "esp32s3",
+            "esp32s3beta1",
+            "esp32c3",
+            "esp32h2",
+            "esp32h2beta1",
+            "esp32c6",
+        ],
         "Only chip with 6 keys",
     )
     def test_burn_bit_for_chips_with_6_key_blocks(self):

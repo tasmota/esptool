@@ -16,6 +16,7 @@ from .targets import (
     ESP32C2ROM,
     ESP32C3ROM,
     ESP32C6BETAROM,
+    ESP32C6ROM,
     ESP32H2BETA1ROM,
     ESP32H2BETA2ROM,
     ESP32ROM,
@@ -33,21 +34,7 @@ def align_file_position(f, size):
     f.seek(align, 1)
 
 
-class ESPBOOTLOADER(object):
-    """
-    These are constants related to software ESP8266 bootloader,
-    working with 'v2' image files
-    """
-
-    # First byte of the "v2" application image
-    IMAGE_V2_MAGIC = 0xEA
-
-    # First 'segment' value in a "v2" application image,
-    # appears to be a constant version value?
-    IMAGE_V2_SEGMENT = 4
-
-
-def LoadFirmwareImage(chip, filename):
+def LoadFirmwareImage(chip, image_file):
     """
     Load a firmware image. Can be for any supported SoC.
 
@@ -57,8 +44,9 @@ def LoadFirmwareImage(chip, filename):
     Returns a BaseFirmwareImage subclass, either ESP8266ROMFirmwareImage (v1)
     or ESP8266V2FirmwareImage (v2).
     """
-    chip = re.sub(r"[-()]", "", chip.lower())
-    with open(filename, "rb") as f:
+
+    def select_image_class(f, chip):
+        chip = re.sub(r"[-()]", "", chip.lower())
         if chip != "esp8266":
             return {
                 "esp32": ESP32FirmwareImage,
@@ -70,16 +58,22 @@ def LoadFirmwareImage(chip, filename):
                 "esp32h2beta1": ESP32H2BETA1FirmwareImage,
                 "esp32h2beta2": ESP32H2BETA2FirmwareImage,
                 "esp32c2": ESP32C2FirmwareImage,
+                "esp32c6": ESP32C6FirmwareImage,
             }[chip](f)
         else:  # Otherwise, ESP8266 so look at magic to determine the image type
             magic = ord(f.read(1))
             f.seek(0)
             if magic == ESPLoader.ESP_IMAGE_MAGIC:
                 return ESP8266ROMFirmwareImage(f)
-            elif magic == ESPBOOTLOADER.IMAGE_V2_MAGIC:
+            elif magic == ESP8266V2FirmwareImage.IMAGE_V2_MAGIC:
                 return ESP8266V2FirmwareImage(f)
             else:
                 raise FatalError("Invalid image magic number: %d" % magic)
+
+    if isinstance(image_file, str):
+        with open(image_file, "rb") as f:
+            return select_image_class(f, chip)
+    return select_image_class(image_file, chip)
 
 
 class ImageSegment(object):
@@ -415,13 +409,19 @@ class ESP8266V2FirmwareImage(BaseFirmwareImage):
     """
 
     ROM_LOADER = ESP8266ROM
+    # First byte of the "v2" application image
+    IMAGE_V2_MAGIC = 0xEA
+
+    # First 'segment' value in a "v2" application image,
+    # appears to be a constant version value?
+    IMAGE_V2_SEGMENT = 4
 
     def __init__(self, load_file=None):
         super(ESP8266V2FirmwareImage, self).__init__()
         self.version = 2
         if load_file is not None:
-            segments = self.load_common_header(load_file, ESPBOOTLOADER.IMAGE_V2_MAGIC)
-            if segments != ESPBOOTLOADER.IMAGE_V2_SEGMENT:
+            segments = self.load_common_header(load_file, self.IMAGE_V2_MAGIC)
+            if segments != self.IMAGE_V2_SEGMENT:
                 # segment count is not really segment count here,
                 # but we expect to see '4'
                 print(
@@ -489,8 +489,8 @@ class ESP8266V2FirmwareImage(BaseFirmwareImage):
             f.write(
                 struct.pack(
                     b"<BBBBI",
-                    ESPBOOTLOADER.IMAGE_V2_MAGIC,
-                    ESPBOOTLOADER.IMAGE_V2_SEGMENT,
+                    self.IMAGE_V2_MAGIC,
+                    self.IMAGE_V2_SEGMENT,
                     self.flash_mode,
                     self.flash_size_freq,
                     self.entrypoint,
@@ -548,7 +548,7 @@ class ESP32FirmwareImage(BaseFirmwareImage):
     # to be set to this value so ROM bootloader will skip it.
     WP_PIN_DISABLED = 0xEE
 
-    EXTENDED_HEADER_STRUCT_FMT = "<BBBBHB" + ("B" * 8) + "B"
+    EXTENDED_HEADER_STRUCT_FMT = "<BBBBHBHH" + ("B" * 4) + "B"
 
     IROM_ALIGN = 65536
 
@@ -568,6 +568,8 @@ class ESP32FirmwareImage(BaseFirmwareImage):
         self.wp_drv = 0
         self.chip_id = 0
         self.min_rev = 0
+        self.min_rev_full = 0
+        self.max_rev_full = 0
 
         self.append_digest = append_digest
 
@@ -626,6 +628,14 @@ class ESP32FirmwareImage(BaseFirmwareImage):
                 for s in sorted(self.segments, key=lambda s: s.addr)
                 if not self.is_flash_addr(s.addr)
             ]
+
+            # Patch to support 761 union bus memmap     // TODO: ESPTOOL-512
+            # move ".flash.appdesc" segment to the top of the flash segment
+            for segment in flash_segments:
+                if segment.name == ".flash.appdesc":
+                    flash_segments.remove(segment)
+                    flash_segments.insert(0, segment)
+                    break
 
             # check for multiple ELF sections that are mapped in the same
             # flash mapping region. This is usually a sign of a broken linker script,
@@ -781,9 +791,11 @@ class ESP32FirmwareImage(BaseFirmwareImage):
             )
 
         self.min_rev = fields[5]
+        self.min_rev_full = fields[6]
+        self.max_rev_full = fields[7]
 
         # reserved fields in the middle should all be zero
-        if any(f for f in fields[6:-1] if f != 0):
+        if any(f for f in fields[8:-1] if f != 0):
             print(
                 "Warning: some reserved header fields have non-zero values. "
                 "This image may be from a newer esptool.py?"
@@ -811,8 +823,10 @@ class ESP32FirmwareImage(BaseFirmwareImage):
             join_byte(self.hd_drv, self.wp_drv),
             self.ROM_LOADER.IMAGE_CHIP_ID,
             self.min_rev,
+            self.min_rev_full,
+            self.max_rev_full,
         ]
-        fields += [0] * 8  # padding
+        fields += [0] * 4  # padding
         fields += [append_digest]
 
         packed = struct.pack(self.EXTENDED_HEADER_STRUCT_FMT, *fields)
@@ -1002,11 +1016,31 @@ class ESP32C2FirmwareImage(ESP32FirmwareImage):
 
     def set_mmu_page_size(self, size):
         if size not in [16384, 32768, 65536]:
-            raise FatalError("{} is not a valid page size.".format(size))
+            raise FatalError(
+                "{} bytes is not a valid ESP32-C2 page size, "
+                "select from 64KB, 32KB, 16KB.".format(size)
+            )
         self.IROM_ALIGN = size
 
 
 ESP32C2ROM.BOOTLOADER_IMAGE = ESP32C2FirmwareImage
+
+
+class ESP32C6FirmwareImage(ESP32FirmwareImage):
+    """ESP32C6 Firmware Image almost exactly the same as ESP32FirmwareImage"""
+
+    ROM_LOADER = ESP32C6ROM
+
+    def set_mmu_page_size(self, size):
+        if size not in [8192, 16384, 32768, 65536]:
+            raise FatalError(
+                "{} bytes is not a valid ESP32-C6 page size, "
+                "select from 64KB, 32KB, 16KB, 8KB.".format(size)
+            )
+        self.IROM_ALIGN = size
+
+
+ESP32C6ROM.BOOTLOADER_IMAGE = ESP32C6FirmwareImage
 
 
 class ELFFile(object):

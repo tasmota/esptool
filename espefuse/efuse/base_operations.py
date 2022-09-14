@@ -392,6 +392,38 @@ def burn_efuse(esp, efuses, args):
             )
         )
         efuse.save(new_value)
+
+    print()
+    if "ENABLE_SECURITY_DOWNLOAD" in efuse_name_list:
+        print(
+            "ENABLE_SECURITY_DOWNLOAD -> 1: eFuses will not be read back "
+            "for confirmation because this mode disables "
+            "any SRAM and register operations."
+        )
+        print("                               espefuse will not work.")
+        print("                               esptool can read/write only flash.")
+
+    if "DIS_DOWNLOAD_MODE" in efuse_name_list:
+        print(
+            "DIS_DOWNLOAD_MODE -> 1: eFuses will not be read back for "
+            "confirmation because this mode disables any communication with the chip."
+        )
+        print(
+            "                        espefuse/esptool will not work because "
+            "they will not be able to connect to the chip."
+        )
+
+    if (
+        esp.CHIP_NAME == "ESP32"
+        and esp.get_chip_revision() >= 300
+        and "UART_DOWNLOAD_DIS" in efuse_name_list
+    ):
+        print(
+            "UART_DOWNLOAD_DIS -> 1: eFuses will be read for confirmation, "
+            "but after that connection to the chip will become impossible."
+        )
+        print("                        espefuse/esptool will not work.")
+
     if not efuses.burn_all(check_batch_mode=True):
         return
 
@@ -434,7 +466,7 @@ def read_protect_efuse(esp, efuses, args):
                 if (
                     efuse_name == "BLOCK2"
                     and not efuses["ABS_DONE_0"].get()
-                    and "revision 3" in esp.get_chip_description()
+                    and esp.get_chip_revision() >= 300
                 ):
                     if efuses["ABS_DONE_1"].get():
                         raise esptool.FatalError(

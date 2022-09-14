@@ -118,7 +118,7 @@ def add_commands(subparsers, efuses):
     p.add_argument("voltage", help="Voltage selection", choices=["1.8V", "3.3V", "OFF"])
 
     p = subparsers.add_parser(
-        "burn_custom_mac", help="Burn a 48-bit Custom MAC Address to EFUSE BLOCK3."
+        "burn_custom_mac", help="Burn a 48-bit Custom MAC Address to EFUSE BLOCK1."
     )
     p.add_argument(
         "mac",
@@ -151,7 +151,7 @@ def set_flash_voltage(esp, efuses, args):
 def adc_info(esp, efuses, args):
     print("")
     # fmt: off
-    if efuses["BLOCK2_VERSION_MINOR"].get() == 1:
+    if efuses["BLK_VERSION_MINOR"].get() == 1:
         print("    RF_REF_I_BIAS_CONFIG:        {}".format(efuses["RF_REF_I_BIAS_CONFIG"].get()))
 
         print("    LDO_VOL_BIAS_CONFIG_LOW:     {}".format(efuses["LDO_VOL_BIAS_CONFIG_LOW"].get()))
@@ -165,7 +165,7 @@ def adc_info(esp, efuses, args):
         print("    ADC_CALIBRATION_2:           {}".format(efuses["ADC_CALIBRATION_2"].get()))
 
     else:
-        print("BLOCK2_VERSION_MINOR = {}".format(efuses["BLOCK2_VERSION_MINOR"].get_meaning()))
+        print("BLK_VERSION_MINOR = {}".format(efuses["BLK_VERSION_MINOR"].get_meaning()))
     # fmt: on
 
 

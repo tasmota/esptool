@@ -69,6 +69,14 @@ Use the ``-e/--erase-all`` option to erase all flash sectors (not just the write
 
     This behavior can be overridden with the ``--force`` option. **Use this only at your own risk and only if you know what you are doing!**
 
+    Flashing an Incompatible Image
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    ``esptool.py`` checks every binary before flashing. If a valid firmware image is detected, the ``Chip ID`` and ``Minimum chip revision`` fields in its :ref:`header <image-format>` are compared against the actually connected chip.
+    If the image turns out to be incompatible with the chip in use or requires a newer chip revision, flashing is stopped.
+
+    This behavior can be overridden with the ``--force`` option.
+
 Read Flash Contents: read_flash
 --------------------------------
 
@@ -138,6 +146,8 @@ Example output:
 
 Refer to `flashrom source code <https://review.coreboot.org/plugins/gitiles/flashrom/+/refs/heads/master/flashchips.h>`__ for flash chip manufacturer name and part number.
 
+.. _elf-2-image:
+
 Convert ELF to Binary: elf2image
 --------------------------------
 
@@ -187,13 +197,11 @@ This information corresponds to the headers described in :ref:`image-format`.
 
 ::
 
-    esptool.py --chip {IDF_TARGET_NAME} image_info --version 2 my_esp_app.bin
+    esptool.py image_info --version 2 my_esp_app.bin
 
 .. only:: not esp8266
 
-    .. note::
-
-        Note that ``--chip {IDF_TARGET_NAME}`` is required when reading {IDF_TARGET_NAME} images. Otherwise the default is ``--chip esp8266`` and the image will be interpreted as an invalid ESP8266 image.
+    If a valid `ESP-IDF application header <https://docs.espressif.com/projects/esp-idf/en/latest/api-reference/system/app_image_format.html#application-description>`__ is detected in the image, specific fields describing the application are also displayed.
 
 .. _merge-bin:
 
@@ -240,6 +248,6 @@ The following commands are less commonly used, or only of interest to advanced u
     *  :ref:`read-mem-write-mem`
     *  :ref:`read-flash-status`
     *  :ref:`write-flash-status`
-    *  :ref:`chip-id`
+    :esp8266: *  :ref:`chip-id`
     :esp8266: *  :ref:`make-image`
     :esp8266: *  :ref:`run`
