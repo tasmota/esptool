@@ -45,6 +45,9 @@
 #define WITH_USB_OTG 1
 #endif // ESP32S3
 
+// Increase CPU freq to speed up read/write operations over USB
+#define USE_MAX_CPU_FREQ (WITH_USB_JTAG_SERIAL || WITH_USB_OTG)
+
 /**********************************************************
  * Per-SOC based peripheral register base addresses
  */
@@ -67,6 +70,7 @@
 #define GPIO_BASE_REG       0x3f404000
 #define USB_BASE_REG        0x60080000
 #define RTCCNTL_BASE_REG    0x3f408000
+#define SYSTEM_BASE_REG     0x3F4C0000
 #endif
 
 #ifdef ESP32S3
@@ -77,6 +81,7 @@
 #define USB_BASE_REG        0x60080000
 #define RTCCNTL_BASE_REG    0x60008000 /* RTC Control */
 #define USB_DEVICE_BASE_REG 0x60038000
+#define SYSTEM_BASE_REG     0x600C0000
 #endif
 
 #ifdef ESP32C3
@@ -86,6 +91,7 @@
 #define GPIO_BASE_REG       0x60004000
 #define RTCCNTL_BASE_REG    0x60008000
 #define USB_DEVICE_BASE_REG 0x60043000
+#define SYSTEM_BASE_REG     0x600C0000
 #endif
 
 #ifdef ESP32C6BETA
@@ -282,6 +288,52 @@
 #endif
 
 #define RTC_CNTL_FORCE_DOWNLOAD_BOOT  (1 << 0)
+
+/**********************************************************
+ * SYSTEM registers
+ */
+
+#ifdef ESP32S3
+#define SYSTEM_CPU_PER_CONF_REG       (SYSTEM_BASE_REG + 0x010)
+#define SYSTEM_CPUPERIOD_SEL_M        ((SYSTEM_CPUPERIOD_SEL_V)<<(SYSTEM_CPUPERIOD_SEL_S))
+#define SYSTEM_CPUPERIOD_SEL_V        0x3
+#define SYSTEM_CPUPERIOD_SEL_S        0
+#define SYSTEM_CPUPERIOD_MAX          2  // CPU_CLK frequency is 240 MHz
+
+#define SYSTEM_SYSCLK_CONF_REG        (SYSTEM_BASE_REG + 0x060)
+#define SYSTEM_SOC_CLK_SEL_M          ((SYSTEM_SOC_CLK_SEL_V)<<(SYSTEM_SOC_CLK_SEL_S))
+#define SYSTEM_SOC_CLK_SEL_V          0x3
+#define SYSTEM_SOC_CLK_SEL_S          10
+#define SYSTEM_SOC_CLK_MAX            1
+#endif // ESP32S3
+
+#ifdef ESP32C3
+#define SYSTEM_CPU_PER_CONF_REG       (SYSTEM_BASE_REG + 0x008)
+#define SYSTEM_CPUPERIOD_SEL_M        ((SYSTEM_CPUPERIOD_SEL_V)<<(SYSTEM_CPUPERIOD_SEL_S))
+#define SYSTEM_CPUPERIOD_SEL_V        0x3
+#define SYSTEM_CPUPERIOD_SEL_S        0
+#define SYSTEM_CPUPERIOD_MAX          1  // CPU_CLK frequency is 160 MHz
+
+#define SYSTEM_SYSCLK_CONF_REG        (SYSTEM_BASE_REG + 0x058)
+#define SYSTEM_SOC_CLK_SEL_M          ((SYSTEM_SOC_CLK_SEL_V)<<(SYSTEM_SOC_CLK_SEL_S))
+#define SYSTEM_SOC_CLK_SEL_V          0x3
+#define SYSTEM_SOC_CLK_SEL_S          10
+#define SYSTEM_SOC_CLK_MAX            1
+#endif // ESP32C3
+
+#ifdef ESP32S2
+#define SYSTEM_CPU_PER_CONF_REG       (SYSTEM_BASE_REG + 0x018)
+#define SYSTEM_CPUPERIOD_SEL_M        ((SYSTEM_CPUPERIOD_SEL_V)<<(SYSTEM_CPUPERIOD_SEL_S))
+#define SYSTEM_CPUPERIOD_SEL_V        0x3
+#define SYSTEM_CPUPERIOD_SEL_S        0
+#define SYSTEM_CPUPERIOD_MAX          2  // CPU_CLK frequency is 240 MHz
+
+#define SYSTEM_SYSCLK_CONF_REG        (SYSTEM_BASE_REG + 0x08C)
+#define SYSTEM_SOC_CLK_SEL_M          ((SYSTEM_SOC_CLK_SEL_V)<<(SYSTEM_SOC_CLK_SEL_S))
+#define SYSTEM_SOC_CLK_SEL_V          0x3
+#define SYSTEM_SOC_CLK_SEL_S          10
+#define SYSTEM_SOC_CLK_MAX            1
+#endif // ESP32S2
 
 /**********************************************************
  * Per-SOC security info buffer size
