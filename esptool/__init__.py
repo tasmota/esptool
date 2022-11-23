@@ -30,7 +30,7 @@ __all__ = [
     "write_mem",
 ]
 
-__version__ = "4.3"
+__version__ = "4.4"
 
 import argparse
 import inspect
@@ -65,12 +65,14 @@ from esptool.cmds import (
     write_mem,
 )
 from esptool.loader import DEFAULT_CONNECT_ATTEMPTS, ESPLoader, list_ports
-from esptool.targets import CHIP_DEFS, CHIP_LIST, ESP32ROM, ESP8266ROM
+from esptool.targets import CHIP_DEFS, CHIP_LIST, ESP32ROM
 from esptool.util import (
     FatalError,
     NotImplementedInROMError,
     flash_size_bytes,
 )
+
+import serial
 
 
 def main(argv=None, esp=None):
@@ -245,7 +247,7 @@ def main(argv=None, esp=None):
                 "15m",
                 "12m",
             ],
-            default=os.environ.get("ESPTOOL_FF", "keep" if allow_keep else "40m"),
+            default=os.environ.get("ESPTOOL_FF", "keep" if allow_keep else None),
         )
         parent.add_argument(
             "--flash_mode",
@@ -916,6 +918,8 @@ def get_default_connected_device(
             if port is not None:
                 raise
             print("%s failed to connect: %s" % (each_port, err))
+            if _esp and _esp._port:
+                _esp._port.close()
             _esp = None
     return _esp
 
@@ -1021,8 +1025,20 @@ def _main():
     try:
         main()
     except FatalError as e:
-        print("\nA fatal error occurred: %s" % e)
+        print(f"\nA fatal error occurred: {e}")
         sys.exit(2)
+    except serial.serialutil.SerialException as e:
+        print(f"\nA serial exception error occurred: {e}")
+        print(
+            "Note: This error originates from pySerial. "
+            "It is likely not a problem with esptool, "
+            "but with the hardware connection or drivers."
+        )
+        print(
+            "For troubleshooting steps visit: "
+            "https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html"
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
