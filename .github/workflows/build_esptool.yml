@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        TARGET: [macos, linux-amd64, win64, arm, arm64]
+        TARGET: [macos, linux-amd64, win64]
     env:
       DISTPATH: esptool-${{ needs.create_release.outputs.VERSION }}-${{ matrix.TARGET }}
     steps:
