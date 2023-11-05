@@ -1,6 +1,6 @@
 MEMORY {
-  iram : org = 0x40378000, len = 0x18000
-  dram : org = 0x3FCA0000, len = 0x28000
+  iram : org = 0x40800000, len = 0x4000
+  dram : org = 0x40830000, len = 0x18000
 }
 
 ENTRY(stub_main)
@@ -23,4 +23,4 @@ SECTIONS {
   } > dram
 }
 
-INCLUDE "rom_32s3_beta_2.ld"
+INCLUDE "rom_32h2.ld"
