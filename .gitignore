@@ -14,3 +14,8 @@ local.mk
 report.xml
 
 docs/_build/
+.DS_Store
+esp_rfc2217_server.spec
+espefuse.spec
+espsecure.spec
+esptool.spec
