@@ -57,7 +57,7 @@ except Exception:
         raise
 
 
-__version__ = "3.3.4-dev"
+__version__ = "3.3.1"
 
 MAX_UINT32 = 0xffffffff
 MAX_UINT24 = 0xffffff
@@ -73,7 +73,6 @@ ERASE_WRITE_TIMEOUT_PER_MB = 40       # timeout (per megabyte) for erasing and w
 MEM_END_ROM_TIMEOUT = 0.05            # special short timeout for ESP_MEM_END, as it may never respond
 DEFAULT_SERIAL_WRITE_TIMEOUT = 10     # timeout for serial port write
 DEFAULT_CONNECT_ATTEMPTS = 7          # default number of times to try connection
-WRITE_BLOCK_ATTEMPTS = 3              # number of times to try writing a data block
 
 SUPPORTED_CHIPS = ['esp8266', 'esp32', 'esp32s2', 'esp32s3beta2', 'esp32s3', 'esp32c3', 'esp32c6beta', 'esp32h2beta1', 'esp32h2beta2', 'esp32c2']
 
@@ -119,37 +118,13 @@ def get_default_connected_device(serial_list, port, connect_attempts, initial_ba
             if port is not None:
                 raise
             print("%s failed to connect: %s" % (each_port, err))
-            if _esp and _esp._port:
-                _esp._port.close()
             _esp = None
     return _esp
 
 
-DETECTED_FLASH_SIZES = {
-    0x12: "256KB",
-    0x13: "512KB",
-    0x14: "1MB",
-    0x15: "2MB",
-    0x16: "4MB",
-    0x17: "8MB",
-    0x18: "16MB",
-    0x19: "32MB",
-    0x1A: "64MB",
-    0x1B: "128MB",
-    0x1C: "256MB",
-    0x20: "64MB",
-    0x21: "128MB",
-    0x22: "256MB",
-    0x32: "256KB",
-    0x33: "512KB",
-    0x34: "1MB",
-    0x35: "2MB",
-    0x36: "4MB",
-    0x37: "8MB",
-    0x38: "16MB",
-    0x39: "32MB",
-    0x3A: "64MB",
-}
+DETECTED_FLASH_SIZES = {0x12: '256KB', 0x13: '512KB', 0x14: '1MB',
+                        0x15: '2MB', 0x16: '4MB', 0x17: '8MB',
+                        0x18: '16MB', 0x19: '32MB', 0x1a: '64MB', 0x21: '128MB'}
 
 
 def check_supported_function(func, check_func):
@@ -821,52 +796,26 @@ class ESPLoader(object):
             print("Took %.2fs to erase flash block" % (time.time() - t))
         return num_blocks
 
+    """ Write block to flash """
     def flash_block(self, data, seq, timeout=DEFAULT_TIMEOUT):
-        """Write block to flash, retry if fail"""
-        for attempts_left in range(WRITE_BLOCK_ATTEMPTS - 1, -1, -1):
-            try:
-                self.check_command(
-                    "write to target Flash after seq %d" % seq,
-                    self.ESP_FLASH_DATA,
-                    struct.pack("<IIII", len(data), seq, 0, 0) + data,
-                    self.checksum(data),
-                    timeout=timeout,
-                )
-                break
-            except FatalError:
-                if attempts_left:
-                    self.trace(
-                        "Block write failed, "
-                        "retrying with {} attempts left".format(attempts_left)
-                    )
-                else:
-                    raise
+        self.check_command("write to target Flash after seq %d" % seq,
+                           self.ESP_FLASH_DATA,
+                           struct.pack('<IIII', len(data), seq, 0, 0) + data,
+                           self.checksum(data),
+                           timeout=timeout)
 
+    """ Encrypt before writing to flash """
     def flash_encrypt_block(self, data, seq, timeout=DEFAULT_TIMEOUT):
-        """Encrypt, write block to flash, retry if fail"""
         if isinstance(self, (ESP32S2ROM, ESP32C3ROM, ESP32S3ROM, ESP32H2BETA1ROM, ESP32C2ROM, ESP32H2BETA2ROM)) and not self.IS_STUB:
             # ROM support performs the encrypted writes via the normal write command,
             # triggered by flash_begin(begin_rom_encrypted=True)
             return self.flash_block(data, seq, timeout)
 
-        for attempts_left in range(WRITE_BLOCK_ATTEMPTS - 1, -1, -1):
-            try:
-                self.check_command(
-                    "Write encrypted to target Flash after seq %d" % seq,
-                    self.ESP_FLASH_ENCRYPT_DATA,
-                    struct.pack("<IIII", len(data), seq, 0, 0) + data,
-                    self.checksum(data),
-                    timeout=timeout,
-                )
-                break
-            except FatalError:
-                if attempts_left:
-                    self.trace(
-                        "Encrypted block write failed, "
-                        "retrying with {} attempts left".format(attempts_left)
-                    )
-                else:
-                    raise
+        self.check_command("Write encrypted to target Flash after seq %d" % seq,
+                           self.ESP_FLASH_ENCRYPT_DATA,
+                           struct.pack('<IIII', len(data), seq, 0, 0) + data,
+                           self.checksum(data),
+                           timeout=timeout)
 
     """ Leave flash mode and run/reboot """
     def flash_finish(self, reboot=False):
@@ -976,27 +925,11 @@ class ESPLoader(object):
             print("Took %.2fs to erase flash block" % (time.time() - t))
         return num_blocks
 
+    """ Write block to flash, send compressed """
     @stub_and_esp32_function_only
     def flash_defl_block(self, data, seq, timeout=DEFAULT_TIMEOUT):
-        """Write block to flash, send compressed, retry if fail"""
-        for attempts_left in range(WRITE_BLOCK_ATTEMPTS - 1, -1, -1):
-            try:
-                self.check_command(
-                    "write compressed data to flash after seq %d" % seq,
-                    self.ESP_FLASH_DEFL_DATA,
-                    struct.pack("<IIII", len(data), seq, 0, 0) + data,
-                    self.checksum(data),
-                    timeout=timeout,
-                )
-                break
-            except FatalError:
-                if attempts_left:
-                    self.trace(
-                        "Compressed block write failed, "
-                        "retrying with {} attempts left".format(attempts_left)
-                    )
-                else:
-                    raise
+        self.check_command("write compressed data to flash after seq %d" % seq,
+                           self.ESP_FLASH_DEFL_DATA, struct.pack('<IIII', len(data), seq, 0, 0) + data, self.checksum(data), timeout=timeout)
 
     """ Leave compressed flash mode and run/reboot """
     @stub_and_esp32_function_only
@@ -1556,9 +1489,6 @@ class ESP32ROM(ESPLoader):
     EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT = (1 << 7)  # EFUSE_RD_DISABLE_DL_ENCRYPT
 
     DR_REG_SYSCON_BASE = 0x3ff66000
-    APB_CTL_DATE_ADDR = DR_REG_SYSCON_BASE + 0x7C
-    APB_CTL_DATE_V = 0x1
-    APB_CTL_DATE_S = 31
 
     SPI_W0_OFFS = 0x80
 
@@ -1665,43 +1595,35 @@ class ESP32ROM(ESPLoader):
         pkg_version += ((word3 >> 2) & 0x1) << 3
         return pkg_version
 
-    # Returns new version format based on major and minor versions
-    def get_chip_full_revision(self):
-        return self.get_major_chip_version() * 100 + self.get_minor_chip_version()
-
-    # Returns old version format (ECO number). Use the new format get_chip_full_revision().
     def get_chip_revision(self):
-        return self.get_major_chip_version()
+        word3 = self.read_efuse(3)
+        word5 = self.read_efuse(5)
+        apb_ctl_date = self.read_reg(self.DR_REG_SYSCON_BASE + 0x7C)
 
-    def get_minor_chip_version(self):
-        return (self.read_efuse(5) >> 24) & 0x3
-
-    def get_major_chip_version(self):
-        rev_bit0 = (self.read_efuse(3) >> 15) & 0x1
-        rev_bit1 = (self.read_efuse(5) >> 20) & 0x1
-        apb_ctl_date = self.read_reg(self.APB_CTL_DATE_ADDR)
-        rev_bit2 = (apb_ctl_date >> self.APB_CTL_DATE_S) & self.APB_CTL_DATE_V
-        combine_value = (rev_bit2 << 2) | (rev_bit1 << 1) | rev_bit0
-
-        revision = {
-            0: 0,
-            1: 1,
-            3: 2,
-            7: 3,
-        }.get(combine_value, 0)
-        return revision
+        rev_bit0 = (word3 >> 15) & 0x1
+        rev_bit1 = (word5 >> 20) & 0x1
+        rev_bit2 = (apb_ctl_date >> 31) & 0x1
+        if rev_bit0:
+            if rev_bit1:
+                if rev_bit2:
+                    return 3
+                else:
+                    return 2
+            else:
+                return 1
+        return 0
 
     def get_chip_description(self):
         pkg_version = self.get_pkg_version()
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        rev3 = major_rev == 3
+        chip_revision = self.get_chip_revision()
+        rev3 = (chip_revision == 3)
         single_core = self.read_efuse(3) & (1 << 0)  # CHIP_VER DIS_APP_CPU
 
         chip_name = {
             0: "ESP32-S0WDQ6" if single_core else "ESP32-D0WDQ6",
-            1: "ESP32-S0WD" if single_core else "ESP32-D0WD",
-            2: "ESP32-D2WD",
+            1: "ESP32-S0WDQ5" if single_core else "ESP32-D0WDQ5",
+            2: "ESP32-S2WDQ5" if single_core else "ESP32-D2WDQ5",
+            3: "ESP32-S0WD-OEM" if single_core else "ESP32-D0WD-OEM",
             4: "ESP32-U4WDH",
             5: "ESP32-PICO-V3" if rev3 else "ESP32-PICO-D4",
             6: "ESP32-PICO-V3-02",
@@ -1712,7 +1634,7 @@ class ESP32ROM(ESPLoader):
         if chip_name.startswith("ESP32-D0WD") and rev3:
             chip_name += "-V3"
 
-        return "%s (revision v%d.%d)" % (chip_name, major_rev, minor_rev)
+        return "%s (revision %d)" % (chip_name, chip_revision)
 
     def get_chip_features(self):
         features = ["WiFi"]
@@ -1854,8 +1776,6 @@ class ESP32S2ROM(ESP32ROM):
     # todo: use espefuse APIs to get this info
     EFUSE_BASE = 0x3f41A000
     EFUSE_RD_REG_BASE = EFUSE_BASE + 0x030  # BLOCK0 read base address
-    EFUSE_BLOCK1_ADDR = EFUSE_BASE + 0x044
-    EFUSE_BLOCK2_ADDR = EFUSE_BASE + 0x05C
 
     EFUSE_PURPOSE_KEY0_REG = EFUSE_BASE + 0x34
     EFUSE_PURPOSE_KEY0_SHIFT = 24
@@ -1900,37 +1820,33 @@ class ESP32S2ROM(ESP32ROM):
                   [0x40080000, 0x40800000, "IROM"],
                   [0x50000000, 0x50002000, "RTC_DATA"]]
 
-    # Returns old version format (ECO number). Use the new format get_chip_full_revision().
-    def get_chip_revision(self):
-        return self.get_major_chip_version()
-
     def get_pkg_version(self):
         num_word = 4
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 0) & 0x0F
-
-    def get_minor_chip_version(self):
-        hi_num_word = 3
-        hi = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * hi_num_word)) >> 20) & 0x01
-        low_num_word = 4
-        low = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * low_num_word)) >> 4) & 0x07
-        return (hi << 3) + low
-
-    def get_major_chip_version(self):
-        num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 18) & 0x03
+        block1_addr = self.EFUSE_BASE + 0x044
+        word3 = self.read_reg(block1_addr + (4 * num_word))
+        pkg_version = (word3 >> 0) & 0x0F
+        return pkg_version
 
     def get_flash_version(self):
         num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 21) & 0x0F
+        block1_addr = self.EFUSE_BASE + 0x044
+        word3 = self.read_reg(block1_addr + (4 * num_word))
+        pkg_version = (word3 >> 21) & 0x0F
+        return pkg_version
 
     def get_psram_version(self):
         num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 28) & 0x0F
+        block1_addr = self.EFUSE_BASE + 0x044
+        word3 = self.read_reg(block1_addr + (4 * num_word))
+        pkg_version = (word3 >> 28) & 0x0F
+        return pkg_version
 
     def get_block2_version(self):
-        # BLK_VERSION_MINOR
         num_word = 4
-        return (self.read_reg(self.EFUSE_BLOCK2_ADDR + (4 * num_word)) >> 4) & 0x07
+        block2_addr = self.EFUSE_BASE + 0x05C
+        word4 = self.read_reg(block2_addr + (4 * num_word))
+        block2_version = (word4 >> 4) & 0x07
+        return block2_version
 
     def get_chip_description(self):
         chip_name = {
@@ -1941,9 +1857,7 @@ class ESP32S2ROM(ESP32ROM):
             100: "ESP32-S2R2",
         }.get(self.get_flash_version() + self.get_psram_version() * 100, "unknown ESP32-S2")
 
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (chip_name, major_rev, minor_rev)
+        return "%s" % (chip_name)
 
     def get_chip_features(self):
         features = ["WiFi"]
@@ -2056,7 +1970,6 @@ class ESP32S2ROM(ESP32ROM):
             self._setRTS(False)
             time.sleep(0.2)
         else:
-            time.sleep(0.1)
             self._setRTS(False)
 
 
@@ -2091,8 +2004,7 @@ class ESP32S3ROM(ESP32ROM):
     # todo: use espefuse APIs to get this info
     EFUSE_BASE = 0x60007000  # BLOCK0 read base address
     MAC_EFUSE_REG = EFUSE_BASE + 0x044
-    EFUSE_BLOCK1_ADDR = EFUSE_BASE + 0x44
-    EFUSE_BLOCK2_ADDR = EFUSE_BASE + 0x5C
+
     EFUSE_RD_REG_BASE = EFUSE_BASE + 0x030  # BLOCK0 read base address
 
     EFUSE_PURPOSE_KEY0_REG = EFUSE_BASE + 0x34
@@ -2140,57 +2052,8 @@ class ESP32S3ROM(ESP32ROM):
                   [0x42000000, 0x42800000, "IROM"],
                   [0x50000000, 0x50002000, "RTC_DATA"]]
 
-    # Returns old version format (ECO number). Use the new format get_chip_full_revision().
-    def get_chip_revision(self):
-        return self.get_minor_chip_version()
-
-    def get_pkg_version(self):
-        num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 21) & 0x07
-
-    def is_eco0(self, minor_raw):
-        # Workaround: The major version field was allocated to other purposes
-        # when block version is v1.1.
-        # Luckily only chip v0.0 have this kind of block version and efuse usage.
-        return (
-            (minor_raw & 0x7) == 0 and self.get_blk_version_major() == 1 and self.get_blk_version_minor() == 1
-        )
-
-    def get_minor_chip_version(self):
-        minor_raw = self.get_raw_minor_chip_version()
-        if self.is_eco0(minor_raw):
-            return 0
-        return minor_raw
-
-    def get_raw_minor_chip_version(self):
-        hi_num_word = 5
-        hi = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * hi_num_word)) >> 23) & 0x01
-        low_num_word = 3
-        low = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * low_num_word)) >> 18) & 0x07
-        return (hi << 3) + low
-
-    def get_blk_version_major(self):
-        num_word = 4
-        return (self.read_reg(self.EFUSE_BLOCK2_ADDR + (4 * num_word)) >> 0) & 0x03
-
-    def get_blk_version_minor(self):
-        num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 24) & 0x07
-
-    def get_major_chip_version(self):
-        minor_raw = self.get_raw_minor_chip_version()
-        if self.is_eco0(minor_raw):
-            return 0
-        return self.get_raw_major_chip_version()
-
-    def get_raw_major_chip_version(self):
-        num_word = 5
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 24) & 0x03
-
     def get_chip_description(self):
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (self.CHIP_NAME, major_rev, minor_rev)
+        return "ESP32-S3"
 
     def get_chip_features(self):
         return ["WiFi", "BLE"]
@@ -2277,7 +2140,6 @@ class ESP32S3ROM(ESP32ROM):
             self._setRTS(False)
             time.sleep(0.2)
         else:
-            time.sleep(0.1)
             self._setRTS(False)
 
 
@@ -2290,9 +2152,7 @@ class ESP32S3BETA2ROM(ESP32S3ROM):
     EFUSE_BASE = 0x6001A000  # BLOCK0 read base address
 
     def get_chip_description(self):
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (self.CHIP_NAME, major_rev, minor_rev)
+        return "ESP32-S3(beta2)"
 
 
 class ESP32C3ROM(ESP32ROM):
@@ -2322,7 +2182,6 @@ class ESP32C3ROM(ESP32ROM):
     UART_DATE_REG_ADDR = 0x60000000 + 0x7c
 
     EFUSE_BASE = 0x60008800
-    EFUSE_BLOCK1_ADDR = EFUSE_BASE + 0x044
     MAC_EFUSE_REG  = EFUSE_BASE + 0x044
 
     EFUSE_RD_REG_BASE = EFUSE_BASE + 0x030  # BLOCK0 read base address
@@ -2361,32 +2220,27 @@ class ESP32C3ROM(ESP32ROM):
                   [0x50000000, 0x50002000, "RTC_DRAM"],
                   [0x600FE000, 0x60100000, "MEM_INTERNAL2"]]
 
-    # Returns old version format (ECO number). Use the new format get_chip_full_revision().
-    def get_chip_revision(self):
-        return self.get_minor_chip_version()
-
     def get_pkg_version(self):
         num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 21) & 0x07
+        block1_addr = self.EFUSE_BASE + 0x044
+        word3 = self.read_reg(block1_addr + (4 * num_word))
+        pkg_version = (word3 >> 21) & 0x07
+        return pkg_version
 
-    def get_minor_chip_version(self):
-        hi_num_word = 5
-        hi = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * hi_num_word)) >> 23) & 0x01
-        low_num_word = 3
-        low = (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * low_num_word)) >> 18) & 0x07
-        return (hi << 3) + low
-
-    def get_major_chip_version(self):
-        num_word = 5
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 24) & 0x03
+    def get_chip_revision(self):
+        # reads WAFER_VERSION field from EFUSE_RD_MAC_SPI_SYS_3_REG
+        block1_addr = self.EFUSE_BASE + 0x044
+        num_word = 3
+        pos = 18
+        return (self.read_reg(block1_addr + (4 * num_word)) & (0x7 << pos)) >> pos
 
     def get_chip_description(self):
         chip_name = {
             0: "ESP32-C3",
         }.get(self.get_pkg_version(), "unknown ESP32-C3")
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (chip_name, major_rev, minor_rev)
+        chip_revision = self.get_chip_revision()
+
+        return "%s (revision %d)" % (chip_name, chip_revision)
 
     def get_chip_features(self):
         return ["Wi-Fi"]
@@ -2453,7 +2307,6 @@ class ESP32H2BETA1ROM(ESP32ROM):
     UART_DATE_REG_ADDR = 0x60000000 + 0x7c
 
     EFUSE_BASE = 0x6001A000
-    EFUSE_BLOCK1_ADDR = EFUSE_BASE + 0x044
     MAC_EFUSE_REG  = EFUSE_BASE + 0x044
 
     EFUSE_RD_REG_BASE = EFUSE_BASE + 0x030  # BLOCK0 read base address
@@ -2489,29 +2342,27 @@ class ESP32H2BETA1ROM(ESP32ROM):
         '12m': 0x2,
     }
 
-    # Returns old version format (ECO number). Use the new format get_chip_full_revision().
-    def get_chip_revision(self):
-        return 0
-
     def get_pkg_version(self):
-        num_word = 4
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 0) & 0x07
-
-    def get_minor_chip_version(self):
         num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 18) & 0x07
+        block1_addr = self.EFUSE_BASE + 0x044
+        word3 = self.read_reg(block1_addr + (4 * num_word))
+        pkg_version = (word3 >> 21) & 0x0F
+        return pkg_version
 
-    def get_major_chip_version(self):
+    def get_chip_revision(self):
+        # reads WAFER_VERSION field from EFUSE_RD_MAC_SPI_SYS_3_REG
+        block1_addr = self.EFUSE_BASE + 0x044
         num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 21) & 0x03
+        pos = 18
+        return (self.read_reg(block1_addr + (4 * num_word)) & (0x7 << pos)) >> pos
 
     def get_chip_description(self):
         chip_name = {
             0: "ESP32-H2",
         }.get(self.get_pkg_version(), "unknown ESP32-H2")
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (chip_name, major_rev, minor_rev)
+        chip_revision = self.get_chip_revision()
+
+        return "%s (revision %d)" % (chip_name, chip_revision)
 
     def get_chip_features(self):
         return ["BLE/802.15.4"]
@@ -2557,11 +2408,6 @@ class ESP32H2BETA2ROM(ESP32H2BETA1ROM):
     CHIP_NAME = "ESP32-H2(beta2)"
     IMAGE_CHIP_ID = 14
 
-    def get_chip_description(self):
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (self.CHIP_NAME, major_rev, minor_rev)
-
 
 class ESP32C2ROM(ESP32C3ROM):
     CHIP_NAME = "ESP32-C2"
@@ -2576,7 +2422,6 @@ class ESP32C2ROM(ESP32C3ROM):
     CHIP_DETECT_MAGIC_VALUE = [0x6F51306F, 0x7c41a06f]
 
     EFUSE_BASE = 0x60008800
-    EFUSE_BLOCK2_ADDR = EFUSE_BASE + 0x040
     MAC_EFUSE_REG  = EFUSE_BASE + 0x040
 
     FLASH_FREQUENCY = {
@@ -2586,30 +2431,24 @@ class ESP32C2ROM(ESP32C3ROM):
         '15m': 0x2,
     }
 
-    # Returns old version format (ECO number). Use the new format get_chip_full_revision().
-    def get_chip_revision(self):
-        return self.get_major_chip_version()
-
     def get_pkg_version(self):
-        num_word = 1
-        return (self.read_reg(self.EFUSE_BLOCK2_ADDR + (4 * num_word)) >> 22) & 0x07
+        num_word = 3
+        block1_addr = self.EFUSE_BASE + 0x044
+        word3 = self.read_reg(block1_addr + (4 * num_word))
+        pkg_version = (word3 >> 21) & 0x0F
+        return pkg_version
 
     def get_chip_description(self):
         chip_name = {
             0: "ESP32-C2",
-            1: "ESP32-C2",
         }.get(self.get_pkg_version(), "unknown ESP32-C2")
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (chip_name, major_rev, minor_rev)
+        chip_revision = self.get_chip_revision()
 
-    def get_minor_chip_version(self):
-        num_word = 1
-        return (self.read_reg(self.EFUSE_BLOCK2_ADDR + (4 * num_word)) >> 16) & 0xF
+        return "%s (revision %d)" % (chip_name, chip_revision)
 
-    def get_major_chip_version(self):
-        num_word = 1
-        return (self.read_reg(self.EFUSE_BLOCK2_ADDR + (4 * num_word)) >> 20) & 0x3
+    def get_chip_revision(self):
+        si = self.get_security_info()
+        return si["api_version"]
 
     def _post_connect(self):
         # ESP32C2 ECO0 is no longer supported by the flasher stub
@@ -2626,29 +2465,13 @@ class ESP32C6BETAROM(ESP32C3ROM):
 
     UART_DATE_REG_ADDR = 0x00000500
 
-    # Returns old version format (ECO number). Use the new format get_chip_full_revision().
-    def get_chip_revision(self):
-        return 0
-
-    def get_pkg_version(self):
-        num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 29) & 0x07
-
-    def get_minor_chip_version(self):
-        num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 18) & 0x0F
-
-    def get_major_chip_version(self):
-        num_word = 3
-        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 22) & 0x03
-
     def get_chip_description(self):
         chip_name = {
             0: "ESP32-C6",
         }.get(self.get_pkg_version(), "unknown ESP32-C6")
-        major_rev = self.get_major_chip_version()
-        minor_rev = self.get_minor_chip_version()
-        return "%s (revision v%d.%d)" % (chip_name, major_rev, minor_rev)
+        chip_revision = self.get_chip_revision()
+
+        return "%s (revision %d)" % (chip_name, chip_revision)
 
 
 class ESP32StubLoader(ESP32ROM):
@@ -2931,7 +2754,6 @@ class BaseFirmwareImage(object):
         self.entrypoint = 0
         self.elf_sha256 = None
         self.elf_sha256_offset = 0
-        self.pad_to_size = 0
 
     def load_common_header(self, load_file, expected_magic):
         (magic, segments, self.flash_mode, self.flash_size_freq, self.entrypoint) = struct.unpack('<BBBBI', load_file.read(8))
@@ -2979,7 +2801,7 @@ class BaseFirmwareImage(object):
             if segment_data[patch_offset:patch_offset + self.SHA256_DIGEST_LEN] != b'\x00' * self.SHA256_DIGEST_LEN:
                 raise FatalError('Contents of segment at SHA256 digest offset 0x%x are not all zero. Refusing to overwrite.' %
                                  self.elf_sha256_offset)
-            assert len(self.elf_sha256) == self.SHA256_DIGEST_LEN
+            assert(len(self.elf_sha256) == self.SHA256_DIGEST_LEN)
             segment_data = segment_data[0:patch_offset] + self.elf_sha256 + \
                 segment_data[patch_offset + self.SHA256_DIGEST_LEN:]
         return segment_data
@@ -2991,20 +2813,6 @@ class BaseFirmwareImage(object):
         f.write(segment_data)
         if checksum is not None:
             return ESPLoader.checksum(segment_data, checksum)
-
-    def save_flash_segment(self, f, segment, checksum=None):
-        """
-        Save the next segment to the image file, return next checksum value if provided
-        """
-        if self.ROM_LOADER.CHIP_NAME == "ESP32":
-            # Work around a bug in ESP-IDF 2nd stage bootloader, that it didn't map the
-            # last MMU page, if an IROM/DROM segment was < 0x24 bytes
-            # over the page boundary.
-            segment_end_pos = f.tell() + len(segment.data) + self.SEG_HEADER_LEN
-            segment_len_remainder = segment_end_pos % self.IROM_ALIGN
-            if segment_len_remainder < 0x24:
-                segment.data += b"\x00" * (0x24 - segment_len_remainder)
-        return self.save_segment(f, segment, checksum)
 
     def read_checksum(self, f):
         """ Return ESPLoader checksum from end of just-read image """
@@ -3248,7 +3056,7 @@ class ESP32FirmwareImage(BaseFirmwareImage):
     # to be set to this value so ROM bootloader will skip it.
     WP_PIN_DISABLED = 0xEE
 
-    EXTENDED_HEADER_STRUCT_FMT = "<BBBBHBHH" + ("B" * 4) + "B"
+    EXTENDED_HEADER_STRUCT_FMT = "<BBBBHB" + ("B" * 8) + "B"
 
     IROM_ALIGN = 65536
 
@@ -3267,8 +3075,6 @@ class ESP32FirmwareImage(BaseFirmwareImage):
         self.hd_drv = 0
         self.wp_drv = 0
         self.min_rev = 0
-        self.min_rev_full = 0
-        self.max_rev_full = 0
 
         self.append_digest = True
 
@@ -3415,14 +3221,18 @@ class ESP32FirmwareImage(BaseFirmwareImage):
                 digest.update(f.read(image_length))
                 f.write(digest.digest())
 
-            if self.pad_to_size:
-                image_length = f.tell()
-                if image_length % self.pad_to_size != 0:
-                    pad_by = self.pad_to_size - (image_length % self.pad_to_size)
-                    f.write(b"\xff" * pad_by)
-
             with open(filename, 'wb') as real_file:
                 real_file.write(f.getvalue())
+
+    def save_flash_segment(self, f, segment, checksum=None):
+        """ Save the next segment to the image file, return next checksum value if provided """
+        segment_end_pos = f.tell() + len(segment.data) + self.SEG_HEADER_LEN
+        segment_len_remainder = segment_end_pos % self.IROM_ALIGN
+        if segment_len_remainder < 0x24:
+            # Work around a bug in ESP-IDF 2nd stage bootloader, that it didn't map the
+            # last MMU page, if an IROM/DROM segment was < 0x24 bytes over the page boundary.
+            segment.data += b'\x00' * (0x24 - segment_len_remainder)
+        return self.save_segment(f, segment, checksum)
 
     def load_extended_header(self, load_file):
         def split_byte(n):
@@ -3442,12 +3252,8 @@ class ESP32FirmwareImage(BaseFirmwareImage):
             print(("Unexpected chip id in image. Expected %d but value was %d. "
                    "Is this image for a different chip model?") % (self.ROM_LOADER.IMAGE_CHIP_ID, chip_id))
 
-        self.min_rev = fields[5]
-        self.min_rev_full = fields[6]
-        self.max_rev_full = fields[7]
-
         # reserved fields in the middle should all be zero
-        if any(f for f in fields[8:-1] if f != 0):
+        if any(f for f in fields[6:-1] if f != 0):
             print("Warning: some reserved header fields have non-zero values. This image may be from a newer esptool.py?")
 
         append_digest = fields[-1]  # last byte is append_digest
@@ -3467,10 +3273,8 @@ class ESP32FirmwareImage(BaseFirmwareImage):
                   join_byte(self.d_drv, self.cs_drv),
                   join_byte(self.hd_drv, self.wp_drv),
                   self.ROM_LOADER.IMAGE_CHIP_ID,
-                  self.min_rev,
-                  self.min_rev_full,
-                  self.max_rev_full]
-        fields += [0] * 4  # padding
+                  self.min_rev]
+        fields += [0] * 8  # padding
         fields += [append_digest]
 
         packed = struct.pack(self.EXTENDED_HEADER_STRUCT_FMT, *fields)
@@ -3935,18 +3739,6 @@ class FatalError(RuntimeError):
             0x109: 'CRC or checksum was invalid',
             0x10A: 'Version was invalid',
             0x10B: 'MAC address was invalid',
-            # Flasher stub error codes
-            0xC000: 'Bad data length',
-            0xC100: 'Bad data checksum',
-            0xC200: 'Bad blocksize',
-            0xC300: 'Invalid command',
-            0xC400: 'Failed SPI operation',
-            0xC500: 'Failed SPI unlock',
-            0xC600: 'Not in flash mode',
-            0xC700: 'Inflate error',
-            0xC800: 'Not enough data',
-            0xC900: 'Too much data',
-            0xFF00: 'Command not implemented',
         }
 
         err_code = struct.unpack(">H", result[:2])
@@ -4305,16 +4097,6 @@ def image_info(args):
         print("WARNING: --chip not specified, defaulting to ESP8266.")
     image = LoadFirmwareImage(args.chip, args.filename)
     print('Image version: %d' % image.version)
-    if args.chip != 'auto' and args.chip != 'esp8266':
-        print(
-            "Minimal chip revision:",
-            "v{}.{},".format(image.min_rev_full // 100, image.min_rev_full % 100),
-            "(legacy min_rev = {})".format(image.min_rev)
-        )
-        print(
-            "Maximal chip revision:",
-            "v{}.{}".format(image.max_rev_full // 100, image.max_rev_full % 100),
-        )
     print('Entry point: %08x' % image.entrypoint if image.entrypoint != 0 else 'Entry point not set')
     print('%d segments' % len(image.segments))
     print()
@@ -4407,18 +4189,13 @@ def elf2image(args):
     image.flash_mode = {'qio': 0, 'qout': 1, 'dio': 2, 'dout': 3}[args.flash_mode]
 
     if args.chip != 'esp8266':
-        image.min_rev = args.min_rev
-        image.min_rev_full = args.min_rev_full
-        image.max_rev_full = args.max_rev_full
+        image.min_rev = int(args.min_rev)
 
     if args.flash_mmu_page_size:
         image.set_mmu_page_size(flash_size_bytes(args.flash_mmu_page_size))
 
     # ELFSection is a subclass of ImageSegment, so can use interchangeably
     image.segments = e.segments if args.use_segments else e.sections
-
-    if args.pad_to_size:
-        image.pad_to_size = flash_size_bytes(args.pad_to_size)
 
     image.flash_size_freq = image.ROM_LOADER.parse_flash_size_arg(args.flash_size)
     image.flash_size_freq += image.ROM_LOADER.parse_flash_freq_arg(args.flash_freq)
@@ -4785,35 +4562,7 @@ def main(argv=None, esp=None):
     parser_elf2image.add_argument('input', help='Input ELF file')
     parser_elf2image.add_argument('--output', '-o', help='Output filename prefix (for version 1 image), or filename (for version 2 single image)', type=str)
     parser_elf2image.add_argument('--version', '-e', help='Output image version', choices=['1', '2', '3'], default='1')
-    parser_elf2image.add_argument(
-        # kept for compatibility
-        # Minimum chip revision (deprecated, consider using --min-rev-full)
-        "--min-rev",
-        "-r",
-        # In v3 we do not do help=argparse.SUPPRESS because
-        # it should remain visible.
-        help="Minimal chip revision (ECO version format)",
-        type=int,
-        choices=range(256),
-        metavar="{0, ... 255}",
-        default=0,
-    )
-    parser_elf2image.add_argument(
-        "--min-rev-full",
-        help="Minimal chip revision (in format: major * 100 + minor)",
-        type=int,
-        choices=range(65536),
-        metavar="{0, ... 65535}",
-        default=0,
-    )
-    parser_elf2image.add_argument(
-        "--max-rev-full",
-        help="Maximal chip revision (in format: major * 100 + minor)",
-        type=int,
-        choices=range(65536),
-        metavar="{0, ... 65535}",
-        default=65535,
-    )
+    parser_elf2image.add_argument('--min-rev', '-r', help='Minimum chip revision', choices=['0', '1', '2', '3'], default='0')
     parser_elf2image.add_argument('--secure-pad', action='store_true',
                                   help='Pad image so once signed it will end on a 64KB boundary. For Secure Boot v1 images only.')
     parser_elf2image.add_argument('--secure-pad-v2', action='store_true',
@@ -4824,11 +4573,7 @@ def main(argv=None, esp=None):
     parser_elf2image.add_argument('--use_segments', help='If set, ELF segments will be used instead of ELF sections to genereate the image.',
                                   action='store_true')
     parser_elf2image.add_argument('--flash-mmu-page-size', help="Change flash MMU page size.", choices=['64KB', '32KB', '16KB'])
-    parser_elf2image.add_argument(
-        "--pad-to-size",
-        help="The block size with which the final binary image after padding must be aligned to. Value 0xFF is used for padding, similar to erase_flash",
-        default=None,
-    )
+
     add_spi_flash_subparsers(parser_elf2image, allow_keep=False, auto_detect=False)
 
     subparsers.add_parser(
