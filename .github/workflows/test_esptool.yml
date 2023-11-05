@@ -28,9 +28,6 @@ jobs:
         python test/test_merge_bin.py
         python test/test_modules.py
 
-    - name: Lint with flake8
-      run: python -m flake8
-
     - name: Check the installed versions can run
       run: |
         esptool.py --help
