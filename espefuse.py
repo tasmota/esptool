@@ -18,7 +18,6 @@ import espressif.efuse.esp32c3 as esp32c3_efuse
 import espressif.efuse.esp32h2 as esp32h2_efuse
 import espressif.efuse.esp32s2 as esp32s2_efuse
 import espressif.efuse.esp32s3 as esp32s3_efuse
-import espressif.efuse.esp32s3 as esp32s3_efuse
 
 import esptool
 
