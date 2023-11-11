@@ -12,11 +12,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
         include:
+        - os: macos-latest
+          TARGET: macos
+          SEPARATOR: ':'
         - os: ubuntu-latest
           TARGET: linux-amd64
           SEPARATOR: ':'
+        - os: windows-latest
+          TARGET: win64
+          EXTEN: .exe
+          SEPARATOR: ';'
     env:
       DISTPATH: esptool-${{ matrix.TARGET }}
       STUBS_DIR: ./esptool/targets/stub_flasher/
