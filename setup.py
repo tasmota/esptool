@@ -16,7 +16,7 @@ except ImportError:
         "Please see the installation section in the esptool documentation"
         " for instructions on how to install it."
     )
-    exit(1)
+    sys.exit(1)
 
 
 # Example code to pull version from esptool module with regex, taken from
@@ -130,6 +130,7 @@ setup(
         "pyserial>=3.0",
         "reedsolo>=1.5.3,<1.8",
         "PyYAML>=5.1",
+        "intelhex",
     ],
     packages=find_packages(),
     include_package_data=True,

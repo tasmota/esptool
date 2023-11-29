@@ -38,6 +38,7 @@ import sys
 import time
 import traceback
 
+from esptool.bin_image import intel_hex_to_bin
 from esptool.cmds import (
     DETECTED_FLASH_SIZES,
     chip_id,
@@ -176,16 +177,18 @@ def main(argv=None, esp=None):
         parent.add_argument(
             "--spi-connection",
             "-sc",
-            help="ESP32-only argument. Override default SPI Flash connection. "
+            help="Override default SPI Flash connection. "
             "Value can be SPI, HSPI or a comma-separated list of 5 I/O numbers "
-            "to use for SPI flash (CLK,Q,D,HD,CS).",
+            "to use for SPI flash (CLK,Q,D,HD,CS). Not supported with ESP8266.",
             action=SpiConnectionAction,
         )
 
     parser_load_ram = subparsers.add_parser(
         "load_ram", help="Download an image to RAM and execute"
     )
-    parser_load_ram.add_argument("filename", help="Firmware image")
+    parser_load_ram.add_argument(
+        "filename", help="Firmware image", action=AutoHex2BinAction
+    )
 
     parser_dump_mem = subparsers.add_parser(
         "dump_mem", help="Dump arbitrary memory to disk"
@@ -357,7 +360,9 @@ def main(argv=None, esp=None):
     parser_image_info = subparsers.add_parser(
         "image_info", help="Dump headers from a binary file (bootloader or application)"
     )
-    parser_image_info.add_argument("filename", help="Image file to parse")
+    parser_image_info.add_argument(
+        "filename", help="Image file to parse", action=AutoHex2BinAction
+    )
     parser_image_info.add_argument(
         "--version",
         "-v",
@@ -477,6 +482,17 @@ def main(argv=None, esp=None):
         "must be aligned to. Value 0xFF is used for padding, similar to erase_flash",
         default=None,
     )
+    parser_elf2image.add_argument(
+        "--ram-only-header",
+        help="Order segments of the output so IRAM and DRAM are placed at the "
+        "beginning and force the main header segment number to RAM segments "
+        "quantity. This will make the other segments invisible to the ROM "
+        "loader. Use this argument with care because the ROM loader will load "
+        "only the RAM segments although the other segments being present in "
+        "the output.",
+        action="store_true",
+        default=None,
+    )
 
     add_spi_flash_subparsers(parser_elf2image, allow_keep=False, auto_detect=False)
 
@@ -590,7 +606,7 @@ def main(argv=None, esp=None):
         "--format",
         "-f",
         help="Format of the output file",
-        choices=["raw", "uf2"],
+        choices=["raw", "uf2", "hex"],
         default="raw",
     )
     uf2_group = parser_merge_bin.add_argument_group("UF2 format")
@@ -754,14 +770,22 @@ def main(argv=None, esp=None):
                     "Keeping initial baud rate %d" % initial_baud
                 )
 
-        # override common SPI flash parameter stuff if configured to do so
+        # Override the common SPI flash parameter stuff if configured to do so
         if hasattr(args, "spi_connection") and args.spi_connection is not None:
-            if esp.CHIP_NAME != "ESP32":
-                raise FatalError(
-                    "Chip %s does not support --spi-connection option." % esp.CHIP_NAME
-                )
-            print("Configuring SPI flash mode...")
-            esp.flash_spi_attach(args.spi_connection)
+            spi_config = args.spi_connection
+            if args.spi_connection == "SPI":
+                value = 0
+            elif args.spi_connection == "HSPI":
+                value = 1
+            else:
+                esp.check_spi_connection(args.spi_connection)
+                # Encode the pin numbers as a 32-bit integer with packed 6-bit values,
+                # the same way the ESP ROM takes them
+                clk, q, d, hd, cs = args.spi_connection
+                spi_config = f"CLK:{clk}, Q:{q}, D:{d}, HD:{hd}, CS:{cs}"
+                value = (hd << 24) | (cs << 18) | (d << 12) | (q << 6) | clk
+            print(f"Configuring SPI flash mode ({spi_config})...")
+            esp.flash_spi_attach(value)
         elif args.no_stub:
             print("Enabling default SPI flash mode...")
             # ROM loader doesn't enable flash unless we explicitly do it
@@ -830,6 +854,15 @@ def main(argv=None, esp=None):
                         "Try checking the chip connections or removing "
                         "any other hardware connected to IOs."
                     )
+                    if (
+                        hasattr(args, "spi_connection")
+                        and args.spi_connection is not None
+                    ):
+                        print(
+                            "Some GPIO pins might be used by other peripherals, "
+                            "try using another --spi-connection combination."
+                        )
+
             except FatalError as e:
                 raise FatalError(f"Unable to verify flash chip connection ({e}).")
 
@@ -1007,42 +1040,44 @@ class SpiConnectionAction(argparse.Action):
     """
 
     def __call__(self, parser, namespace, value, option_string=None):
-        if value.upper() == "SPI":
-            value = 0
-        elif value.upper() == "HSPI":
-            value = 1
+        if value.upper() in ["SPI", "HSPI"]:
+            values = value.upper()
         elif "," in value:
             values = value.split(",")
             if len(values) != 5:
                 raise argparse.ArgumentError(
                     self,
-                    "%s is not a valid list of comma-separate pin numbers. "
-                    "Must be 5 numbers - CLK,Q,D,HD,CS." % value,
+                    f"{value} is not a valid list of comma-separate pin numbers. "
+                    "Must be 5 numbers - CLK,Q,D,HD,CS.",
                 )
             try:
                 values = tuple(int(v, 0) for v in values)
             except ValueError:
                 raise argparse.ArgumentError(
                     self,
-                    "%s is not a valid argument. All pins must be numeric values"
-                    % values,
+                    f"{values} is not a valid argument. "
+                    "All pins must be numeric values",
                 )
-            if any([v for v in values if v > 33 or v < 0]):
-                raise argparse.ArgumentError(
-                    self, "Pin numbers must be in the range 0-33."
-                )
-            # encode the pin numbers as a 32-bit integer with packed 6-bit values,
-            # the same way ESP32 ROM takes them
-            # TODO: make this less ESP32 ROM specific somehow...
-            clk, q, d, hd, cs = values
-            value = (hd << 24) | (cs << 18) | (d << 12) | (q << 6) | clk
         else:
             raise argparse.ArgumentError(
                 self,
-                "%s is not a valid spi-connection value. "
-                "Values are SPI, HSPI, or a sequence of 5 pin numbers CLK,Q,D,HD,CS)."
-                % value,
+                f"{value} is not a valid spi-connection value. "
+                "Values are SPI, HSPI, or a sequence of 5 pin numbers - CLK,Q,D,HD,CS.",
             )
+        setattr(namespace, self.dest, values)
+
+
+class AutoHex2BinAction(argparse.Action):
+    """Custom parser class for auto conversion of input files from hex to bin"""
+
+    def __call__(self, parser, namespace, value, option_string=None):
+        try:
+            with open(value, "rb") as f:
+                # if hex file was detected replace hex file with converted temp bin
+                # otherwise keep the original file
+                value = intel_hex_to_bin(f).name
+        except IOError as e:
+            raise argparse.ArgumentError(self, e)
         setattr(namespace, self.dest, value)
 
 
@@ -1074,6 +1109,8 @@ class AddrFilenamePairAction(argparse.Action):
                     "Must be pairs of an address "
                     "and the binary filename to write there",
                 )
+            # check for intel hex files and convert them to bin
+            argfile = intel_hex_to_bin(argfile, address)
             pairs.append((address, argfile))
 
         # Sort the addresses and check for overlapping
