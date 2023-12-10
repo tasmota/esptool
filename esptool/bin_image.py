@@ -8,8 +8,8 @@ import copy
 import hashlib
 import io
 import os
-import sys
 import re
+import sys
 import struct
 import tempfile
 from typing import BinaryIO, Optional
