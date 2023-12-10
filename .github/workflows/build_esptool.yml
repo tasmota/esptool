@@ -59,27 +59,6 @@ jobs:
         with:
           name: stubs
           path: /home/runner/work/esptool/esptool/flasher_stub/build
-      - name: Build with PyInstaller
-        run: |
-          pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico --add-data="${{ env.STUBS_DIR }}*.json${{ matrix.SEPARATOR }}${{ env.STUBS_DIR }}" esptool.py
-          pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico --add-data="${{ env.EFUSE_DIR }}*.yaml${{ matrix.SEPARATOR }}${{ env.EFUSE_DIR }}" espefuse.py
-          pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico espsecure.py
-          pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico esp_rfc2217_server.py
-      - name: Test binaries
-        shell: bash
-        run: |
-          ./${{ env.DISTPATH }}/esptool${{ matrix.EXTEN }} -h
-          ./${{ env.DISTPATH }}/espefuse${{ matrix.EXTEN }} -h
-          ./${{ env.DISTPATH }}/espsecure${{ matrix.EXTEN }} -h
-          ./${{ env.DISTPATH }}/esp_rfc2217_server${{ matrix.EXTEN }} -h
-      - name: Add license and readme
-        shell: bash
-        run: cp LICENSE README.md ./${{ env.DISTPATH }}
-      - name: Archive artifact
-        uses: actions/upload-artifact@master
-        with:
-          name: ${{ env.DISTPATH }}
-          path: ${{ env.DISTPATH }}
 
   push_stubs:
     name: Commit changed files
@@ -107,55 +86,3 @@ jobs:
       - uses: stefanzweifel/git-auto-commit-action@v4
         with:
           commit_message: Stubs updated
-
-  create_release:
-    name: Create GitHub release
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build-esptool-binaries
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      VERSION: ${{ steps.get_version.outputs.VERSION }}
-    steps:
-      - name: Create release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Version ${{ github.ref }}
-          draft: true
-          prerelease: false
-      - name: Get version
-        id: get_version
-        run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
-        shell: bash
-
-  upload_assets:
-    name: Upload release assets
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: create_release
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        TARGET: [macos, linux-amd64, win64]
-    env:
-      DISTPATH: esptool-${{ needs.create_release.outputs.VERSION }}-${{ matrix.TARGET }}
-    steps:
-      - name: Download built binaries
-        uses: actions/download-artifact@master
-      - name: Rename and package binaries
-        run: |
-          mv esptool-${{ matrix.TARGET }} ${{ env.DISTPATH }}
-          zip -r ${{ env.DISTPATH }}.zip ./${{ env.DISTPATH }}/*
-      - name: Upload release assets
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: "${{ env.DISTPATH }}.zip"
-          asset_name: "${{ env.DISTPATH }}.zip"
-          asset_content_type: application/zip
