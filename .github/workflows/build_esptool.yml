@@ -1,4 +1,4 @@
-name: Build esptool
+name: Build esptool v3.x
 
 on: [push, pull_request]
 
@@ -21,9 +21,9 @@ jobs:
       DISTPATH: esptool-${{ matrix.TARGET }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Set up Python 3.8
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
           python-version: 3.8
       - name: Install dependencies
@@ -46,9 +46,9 @@ jobs:
           ./${{ env.DISTPATH }}/esp_rfc2217_server${{ matrix.EXTEN }} -h
       - name: Add license and readme
         shell: bash
-        run: mv LICENSE README.md ./${{ env.DISTPATH }}
+        run: cp LICENSE README.md ./${{ env.DISTPATH }}
       - name: Archive artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.DISTPATH }}
           path: ${{ env.DISTPATH }}
