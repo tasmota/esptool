@@ -44,6 +44,7 @@ jobs:
           ./test/ci/setup_ci_build_env.sh
           make -C flasher_stub V=1
       - name: Archive stubs artifact
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@master
         with:
           name: stubs
