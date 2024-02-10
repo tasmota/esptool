@@ -2311,6 +2311,9 @@ class ESP32S3ROM(ESP32ROM):
     def hard_reset(self):
         if self.uses_usb():
             self._check_if_can_reset()
+        # issue https://github.com/espressif/arduino-esp32/issues/6762#issuecomment-1829942230
+        # Clear "Force Download Boot" flag, otherwise we keep resetting to boot mode
+        self.write_reg(self.RTC_CNTL_OPTION1_REG, 0, self.RTC_CNTL_FORCE_DOWNLOAD_BOOT_MASK)
 
         print('Hard resetting via RTS pin...')
         self._setRTS(True)  # EN->LOW
@@ -2418,7 +2421,7 @@ class ESP32C3ROM(ESP32ROM):
         return "%s (revision v%d.%d)" % (chip_name, major_rev, minor_rev)
 
     def get_chip_features(self):
-        return ["Wi-Fi"]
+        return ["Wi-Fi", "BLE"]
 
     def get_crystal_freq(self):
         # ESP32C3 XTAL is fixed to 40MHz
@@ -2679,7 +2682,7 @@ class ESP32H2ROM(ESP32C6ROM):
         return f"{chip_name} (revision v{major_rev}.{minor_rev})"
 
     def get_chip_features(self):
-        return ["BLE", "IEEE802.15.4"]
+        return ["BT 5", "IEEE802.15.4"]
 
     def get_crystal_freq(self):
         # ESP32H2 XTAL is fixed to 32MHz
@@ -2752,6 +2755,9 @@ class ESP32C2ROM(ESP32C3ROM):
         major_rev = self.get_major_chip_version()
         minor_rev = self.get_minor_chip_version()
         return f"{chip_name} (revision v{major_rev}.{minor_rev})"
+
+    def get_chip_features(self):
+        return ["Wi-Fi", "BLE"]
 
     def get_minor_chip_version(self):
         num_word = 1
