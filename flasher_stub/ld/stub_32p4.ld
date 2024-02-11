@@ -1,12 +1,6 @@
-/*
- * SPDX-FileCopyrightText: 2019-2022 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: GPL-2.0-or-later
- */
-
 MEMORY {
-  iram : org = 0x40378000, len = 0x18000
-  dram : org = 0x3FCA0000, len = 0x28000
+  iram : org = 0x4FF10000, len = 0x4000
+  dram : org = 0x4FF50000, len = 0x18000
 }
 
 ENTRY(stub_main)
@@ -29,4 +23,4 @@ SECTIONS {
   } > dram
 }
 
-INCLUDE "rom_32s3_beta_2.ld"
+INCLUDE "rom_32p4.ld"

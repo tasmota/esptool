@@ -40,7 +40,7 @@ void uart_isr(void *arg) {
 }
 
 #if WITH_USB_JTAG_SERIAL
-static bool stub_uses_usb_jtag_serial(void)
+bool stub_uses_usb_jtag_serial(void)
 {
   UartDevice *uart = GetUartDevice();
 
@@ -64,14 +64,18 @@ static void stub_configure_rx_uart(void)
   /* All UART reads come via uart_isr or jtag_serial_isr */
 #if WITH_USB_JTAG_SERIAL
   if (stub_uses_usb_jtag_serial()) {
-    #if ESP32C3
-      WRITE_REG(INTERRUPT_CORE0_USB_INTR_MAP_REG, ETS_USB_INUM);
+    #if IS_RISCV
+      #if ESP32P4
+        WRITE_REG(INTERRUPT_CORE0_USB_INTR_MAP_REG, ETS_USB_INUM + CLIC_EXT_INTR_NUM_OFFSET);
+      #else
+        WRITE_REG(INTERRUPT_CORE0_USB_INTR_MAP_REG, ETS_USB_INUM);  // Route USB interrupt to CPU
+      #endif
       esprv_intc_int_set_priority(ETS_USB_INUM, 1);
     #else
       WRITE_REG(INTERRUPT_CORE0_USB_DEVICE_INT_MAP_REG, ETS_USB_INUM);
-    #endif
+    #endif // IS_RISCV
     ets_isr_attach(ETS_USB_INUM, jtag_serial_isr, NULL);
-    REG_SET_MASK(USB_DEVICE_INT_ENA_REG, USB_DEVICE_SERIAL_OUT_RECV_PKT_INT_ENA);
+    WRITE_REG(USB_DEVICE_INT_ENA_REG, USB_DEVICE_SERIAL_OUT_RECV_PKT_INT_ENA);
     ets_isr_unmask(1 << ETS_USB_INUM);
     return;
   }
@@ -116,7 +120,7 @@ static void stub_cdcacm_write_char(char ch)
     }
 }
 
-static bool stub_uses_usb_otg(void)
+bool stub_uses_usb_otg(void)
 {
   UartDevice *uart = GetUartDevice();
 
@@ -171,8 +175,15 @@ void stub_tx_one_char(char c)
 #endif // WITH_USB_OTG
   uart_tx_one_char(c);
 #if WITH_USB_JTAG_SERIAL
+  static unsigned short transferred_without_flush = 0;
   if (stub_uses_usb_jtag_serial()){
-    stub_tx_flush();
+    // Defer flushing until we have a (full - 1) packet or a end of packet (0xc0) byte to increase throughput.
+    // Note that deferring flushing until we have a full packet can cause hang-ups on some platforms.
+    ++transferred_without_flush;
+    if (c == '\xc0' || transferred_without_flush >= 63) {
+      stub_tx_flush();
+      transferred_without_flush = 0;
+    }
   }
 #endif // WITH_USB_JTAG_SERIAL
 }

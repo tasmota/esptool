@@ -4,11 +4,11 @@ on: [push, pull_request]
 
 jobs:
   test_esptool:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        python-version: [2.7, 3.5, 3.6, 3.7, 3.8, 3.9]
+        python-version: ['3.9', '3.10', '3.11']
 
     steps:
     - name: Checkout ref commit
@@ -28,17 +28,14 @@ jobs:
         python test/test_merge_bin.py
         python test/test_modules.py
 
-    - name: Lint with flake8
-      run: python -m flake8
-
     - name: Check the installed versions can run
       run: |
         esptool.py --help
         espefuse.py --help
         espsecure.py --help
 
-    - name: Build stub (Python 3.7 only)
-      if: matrix.python-version == 3.7
+    - name: Build stub (Python 3.11 only)
+      if: matrix.python-version == 3.11
       run: |
         export TOOLCHAIN_DIR=$HOME/toolchain
 

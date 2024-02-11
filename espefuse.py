@@ -15,10 +15,9 @@ from io import StringIO
 import espressif.efuse.esp32 as esp32_efuse
 import espressif.efuse.esp32c2 as esp32c2_efuse
 import espressif.efuse.esp32c3 as esp32c3_efuse
-import espressif.efuse.esp32h2beta1 as esp32h2beta1_efuse
+import espressif.efuse.esp32h2 as esp32h2_efuse
 import espressif.efuse.esp32s2 as esp32s2_efuse
 import espressif.efuse.esp32s3 as esp32s3_efuse
-import espressif.efuse.esp32s3beta2 as esp32s3beta2_efuse
 
 import esptool
 
@@ -43,10 +42,9 @@ SUPPORTED_CHIPS = {
     'esp32': DefChip('ESP32', esp32_efuse, esptool.ESP32ROM),
     'esp32c2': DefChip('ESP32-C2', esp32c2_efuse, esptool.ESP32C2ROM),
     'esp32c3': DefChip('ESP32-C3', esp32c3_efuse, esptool.ESP32C3ROM),
-    'esp32h2beta1': DefChip('ESP32-H2(beta1)', esp32h2beta1_efuse, esptool.ESP32H2BETA1ROM),
+    'esp32h2': DefChip('ESP32-H2', esp32h2_efuse, esptool.ESP32H2ROM),
     'esp32s2': DefChip('ESP32-S2', esp32s2_efuse, esptool.ESP32S2ROM),
     'esp32s3': DefChip('ESP32-S3', esp32s3_efuse, esptool.ESP32S3ROM),
-    'esp32s3beta2': DefChip('ESP32-S3(beta2)', esp32s3beta2_efuse, esptool.ESP32S3BETA2ROM),
 }
 
 
