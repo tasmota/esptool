@@ -198,6 +198,17 @@ class TestReadCommands(EfuseTestCase):
         self.espefuse_py("adc_info -h")
         self.espefuse_py("adc_info")
 
+    def test_adc_info_2(self):
+        if arg_chip == "esp32":
+            self.espefuse_py("burn_efuse BLK3_PART_RESERVE 1")
+        elif arg_chip in ["esp32c3", "esp32s3", "esp32s3beta2"]:
+            self.espefuse_py("burn_efuse BLK_VERSION_MAJOR 1")
+        elif arg_chip in ["esp32c2", "esp32s2", "esp32c6"]:
+            self.espefuse_py("burn_efuse BLK_VERSION_MINOR 1")
+        elif arg_chip in ["esp32h2", "esp32h2beta1"]:
+            self.espefuse_py("burn_efuse BLK_VERSION_MINOR 2")
+        self.espefuse_py("adc_info")
+
     def test_check_error(self):
         self.espefuse_py("check_error -h")
         self.espefuse_py("check_error")
@@ -511,7 +522,7 @@ class TestSetFlashVoltageCommands(EfuseTestCase):
         )
 
 
-@pytest.mark.skipif(arg_chip != "esp32c3", reason="Not necessary fo all chips")
+@pytest.mark.skipif(arg_chip != "esp32c3", reason="Not necessary for all chips")
 class TestValueArgForBurnEfuseCommands(EfuseTestCase):
     def test_efuse_is_bool_given_none(self):
         self.espefuse_py("burn_efuse SECURE_BOOT_KEY_REVOKE0")
@@ -987,7 +998,7 @@ class TestBurnKeyCommands(EfuseTestCase):
         reason="512 bit keys are only supported on ESP32-S2, S3, and P4",
     )
     def test_burn_key_512bit_non_consecutive_blocks(self):
-        # Burn efuses seperately to test different kinds
+        # Burn efuses separately to test different kinds
         # of "key used" detection criteria
         self.espefuse_py(
             f"burn_key \
@@ -1768,7 +1779,7 @@ class TestByteOrderBurnKeyCommand(EfuseTestCase):
 class TestExecuteScriptsCommands(EfuseTestCase):
     @classmethod
     def setup_class(self):
-        # Save the current working directory to be resotred later
+        # Save the current working directory to be restored later
         self.stored_dir = os.getcwd()
 
     @classmethod
