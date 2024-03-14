@@ -1,4 +1,4 @@
-# This file describes eFuses for ESP32-C5 chip
+# This file describes eFuses for ESP32-C61 chip
 #
 # SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
 #
@@ -67,9 +67,9 @@ class EspEfuses(base_fields.EspEfusesBase):
         self._esp = esp
         self.debug = debug
         self.do_not_confirm = do_not_confirm
-        if esp.CHIP_NAME != "ESP32-C5":
+        if esp.CHIP_NAME != "ESP32-C61":
             raise esptool.FatalError(
-                "Expected the 'esp' param for ESP32-C5 chip but got for '%s'."
+                "Expected the 'esp' param for ESP32-C61 chip but got for '%s'."
                 % (esp.CHIP_NAME)
             )
         if not skip_connect:
@@ -228,9 +228,9 @@ class EspEfuses(base_fields.EspEfusesBase):
         """Set timing registers for burning efuses"""
         # Configure clock
         apb_freq = self.get_crystal_freq()
-        if apb_freq not in [40, 48]:
+        if apb_freq != 40:
             raise esptool.FatalError(
-                "The eFuse supports only xtal=40M and 48M (xtal was %d)" % apb_freq
+                "The eFuse supports only xtal=40M (xtal was %d)" % apb_freq
             )
 
         self.update_reg(self.REGS.EFUSE_DAC_CONF_REG, self.REGS.EFUSE_DAC_NUM_M, 0xFF)
@@ -399,7 +399,8 @@ class EfuseKeyPurposeField(EfuseField):
     KEY_PURPOSES = [
         ("USER",                         0,  None,       None,      "no_need_rd_protect"),   # User purposes (software-only use)
         ("ECDSA_KEY",                    1,  None,       "Reverse", "need_rd_protect"),      # ECDSA key
-        ("RESERVED",                     1,  None,       None,      "no_need_rd_protect"),   # Reserved
+        ("XTS_AES_256_KEY_1",            2,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_256_KEY_1 (flash/PSRAM encryption)
+        ("XTS_AES_256_KEY_2",            3,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_256_KEY_2 (flash/PSRAM encryption)
         ("XTS_AES_128_KEY",              4,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_128_KEY (flash/PSRAM encryption)
         ("HMAC_DOWN_ALL",                5,  None,       None,      "need_rd_protect"),      # HMAC Downstream mode
         ("HMAC_DOWN_JTAG",               6,  None,       None,      "need_rd_protect"),      # JTAG soft enable key (uses HMAC Downstream mode)
@@ -408,6 +409,7 @@ class EfuseKeyPurposeField(EfuseField):
         ("SECURE_BOOT_DIGEST0",          9,  "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST0 (Secure Boot key digest)
         ("SECURE_BOOT_DIGEST1",          10, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST1 (Secure Boot key digest)
         ("SECURE_BOOT_DIGEST2",          11, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST2 (Secure Boot key digest)
+        ("XTS_AES_256_KEY",              -1, "VIRTUAL",  None,      "no_need_rd_protect"),   # Virtual purpose splits to XTS_AES_256_KEY_1 and XTS_AES_256_KEY_2
     ]
 # fmt: on
     KEY_PURPOSES_NAME = [name[0] for name in KEY_PURPOSES]
