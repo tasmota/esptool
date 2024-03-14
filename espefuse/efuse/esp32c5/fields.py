@@ -1,6 +1,6 @@
-# This file describes eFuses for ESP32-C5 beta3 chip
+# This file describes eFuses for ESP32-C5 chip
 #
-# SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -67,9 +67,9 @@ class EspEfuses(base_fields.EspEfusesBase):
         self._esp = esp
         self.debug = debug
         self.do_not_confirm = do_not_confirm
-        if esp.CHIP_NAME != "ESP32-C5(beta3)":
+        if esp.CHIP_NAME != "ESP32-C5":
             raise esptool.FatalError(
-                "Expected the 'esp' param for ESP32-C5(beta3) chip but got for '%s'."
+                "Expected the 'esp' param for ESP32-C5 chip but got for '%s'."
                 % (esp.CHIP_NAME)
             )
         if not skip_connect:
