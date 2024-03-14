@@ -351,8 +351,9 @@ class ESP32S3ROM(ESP32ROM):
         uses_usb_otg = self.uses_usb_otg()
         if uses_usb_otg:
             self._check_if_can_reset()
-        # github.com/espressif/arduino-esp32/issues/6762#issuecomment-1829942230
-        # Clear "Force Download Boot" flag, otherwise we keep resetting to boot mode
+
+        # Clear force download boot mode to avoid the chip being stuck in download mode after reset
+        # workaround for issue: https://github.com/espressif/arduino-esp32/issues/6762
         self.write_reg(
             self.RTC_CNTL_OPTION1_REG, 0, self.RTC_CNTL_FORCE_DOWNLOAD_BOOT_MASK
         )
