@@ -10,7 +10,6 @@ NEW_LINE = '__version__ = "{}"\n'
 
 
 def patch_file(path, new_version):
-    assert ".dev" in new_version
     new_version = new_version.lstrip("v")
 
     with open(path, "r") as fin:
