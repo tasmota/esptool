@@ -36,11 +36,18 @@ jobs:
       PIP_EXTRA_INDEX_URL: "https://dl.espressif.com/pypi"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
+        with:
+          ref: main_work
       - name: Set up Python 3.11
-        uses: actions/setup-python@master
+        uses: actions/setup-python@v5
         with:
           python-version: 3.11
+      - name: Update esptool version when releasing
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
+          #git diff
       - name: Install dependencies
         # PyInstaller >=6.0 results in significantly more antivirus false positives
         run: |
@@ -77,12 +84,27 @@ jobs:
           export PATH=$PATH:$ESP8266_BINDIR:$ESP32_BINDIR:$ESP32S2_BINDIR:$ESP32S3_BINDIR:$ESP32C3_BINDIR
           ./ci/setup_ci_build_env.sh
           make -C flasher_stub V=1
-      - name: Archive stubs artifact
+          rm /home/runner/work/esptool/esptool/flasher_stub/build/*.elf
+          rm /home/runner/work/esptool/esptool/flasher_stub/build/*.map
+      - name: Update package.json when a release tag is set
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
+        run: |
+          COMMIT_SHA_LONG=$(git rev-parse --short HEAD || echo "")
+          SHA=${COMMIT_SHA_LONG::7}
+          rm package.json
+          python ci/gen_pio_manifest.py -o "./" -s ${{ github.ref_name }} -c $SHA
+      - name: Upload stubs artifact
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@master
+        uses: jason2866/upload-artifact@v2.0.3
         with:
           name: stubs
           path: /home/runner/work/esptool/esptool/flasher_stub/build
+      - name: Upload package.json artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: jason2866/upload-artifact@v2.0.3
+        with:
+          name: manifest
+          path: /home/runner/work/esptool/esptool/package.json
 
   push_stubs:
     name: Commit changed files
@@ -90,32 +112,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - name: Download builded stubs
-        uses: actions/download-artifact@master
+          ref: main_work
+      - name: Download artifacts
+        uses: jason2866/download-artifact@v3.0.4
         with:
-          name: stubs
-          path: ./mv_stubs
-      - name: Display structure of downloaded files
-        run: |
-          ls -R
-      - name: Move stubs in folder
-        run: |
-          rm ./esptool/targets/stub_flasher/*
-          cp -R ./mv_stubs/*.json ./esptool/targets/stub_flasher
-          ls -R ./esptool/targets/stub_flasher
-          rm -rf ./mv_stubs
+          name: |
+            stubs
+            manifest
+          path: |
+           ./esptool/targets/stub_flasher
+           ./
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: Stubs updated
+          commit_message: updated files
 
   release:
       name: Upload release binaries
       needs: build-esptool-binaries
+      if: startsWith(github.ref, 'refs/tags/')
       runs-on: ubuntu-latest
       steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+          with:
+            ref: main_work
+        - name: Zip esptool.py
+          run: |
+            echo "Packaging new esptool release: ${{ github.ref_name }}"
+            python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
+            COMMIT_SHA_LONG=$(git rev-parse --short HEAD || echo "")
+            SHA=${COMMIT_SHA_LONG::7}
+            rm package.json
+            python ci/gen_pio_manifest.py -o "./" -s ${{ github.ref_name }} -c $SHA
+            python ci/pack_python.py
         - name: Download built binaries
           uses: actions/download-artifact@master
         - name: Rename and package binaries
@@ -126,7 +157,6 @@ jobs:
             zip -r esptool-win64.zip ./esptool-win64
         - name: Release
           uses: jason2866/action-gh-release@v1.3
-          if: startsWith(github.ref, 'refs/tags/')
           with:
             prerelease: true
             files: |
