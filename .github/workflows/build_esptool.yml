@@ -45,7 +45,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
-          git diff
+          #git diff
       - name: Install dependencies
         # PyInstaller >=6.0 results in significantly more antivirus false positives
         run: |
@@ -121,14 +121,17 @@ jobs:
       needs: build-esptool-binaries
       runs-on: ubuntu-latest
       steps:
-        - name: Download built binaries
-          uses: actions/download-artifact@master
         - name: Checkout repository
           uses: actions/checkout@master
-        - name: Rename and package binaries
+        - name: Zip esptool.py
           run: |
             echo "Packaging new esptool release: ${{ github.ref_name }}"
+            python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
             python ci/pack_python.py
+        - name: Download built binaries
+          uses: actions/download-artifact@master
+        - name: Rename and package binaries
+          run: |
             zip -r esptool-macos-arm.zip ./esptool-macos-arm
             zip -r esptool-macos.zip ./esptool-macos
             zip -r esptool-linux-amd64.zip ./esptool-linux-amd64
