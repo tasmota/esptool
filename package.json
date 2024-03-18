@@ -1,15 +1,19 @@
 {
   "name": "tool-esptoolpy",
-  "version": "1.40701+240306",
-  "description": "Espressif ESP8266 and ESP32 serial bootloader utility",
+  "description": "Serial bootloader utility for the Espressif ESP82xx, ESP32x series of SoCs",
   "keywords": [
     "tools",
     "uploader",
-    "espressif"
+    "tasmota",
+    "espressif",
+    "esp8266",
+    "esp32"
   ],
   "license": "GPL-2.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/tasmota/esptool"
-  }
+  },
+  "version": "4.7.2+sha.f595bf4",
+  "date": "2024-03-18"
 }
