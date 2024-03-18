@@ -100,7 +100,7 @@ jobs:
           name: stubs
           path: /home/runner/work/esptool/esptool/flasher_stub/build
       - name: Upload package.json artifact
-        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         uses: jason2866/upload-artifact@v2.0.3
         with:
           name: manifest
@@ -142,10 +142,10 @@ jobs:
           run: |
             echo "Packaging new esptool release: ${{ github.ref_name }}"
             python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
-            #COMMIT_SHA_LONG=$(git rev-parse --short HEAD || echo "")
-            #SHA=${COMMIT_SHA_LONG::7}
-            #rm package.json
-            #python ci/gen_pio_manifest.py -o "./" -s ${{ github.ref_name }} -c $SHA
+            COMMIT_SHA_LONG=$(git rev-parse --short HEAD || echo "")
+            SHA=${COMMIT_SHA_LONG::7}
+            rm package.json
+            python ci/gen_pio_manifest.py -o "./" -s ${{ github.ref_name }} -c $SHA
             python ci/pack_python.py
         - name: Download built binaries
           uses: actions/download-artifact@master
