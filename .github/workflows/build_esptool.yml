@@ -126,7 +126,7 @@ jobs:
         - name: Zip esptool.py
           run: |
             echo "Packaging new esptool release: ${{ github.ref_name }}"
-            python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
+            #python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
             python ci/pack_python.py
         - name: Download built binaries
           uses: actions/download-artifact@master
