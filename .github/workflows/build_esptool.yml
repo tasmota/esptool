@@ -44,7 +44,7 @@ jobs:
       - name: Update esptool version when releasing
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          python ci/patch_dev_release.py --version ${{ github.ref_name }} esptool/__init__.py
+          python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
           git diff
       - name: Install dependencies
         # PyInstaller >=6.0 results in significantly more antivirus false positives
