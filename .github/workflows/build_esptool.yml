@@ -36,7 +36,7 @@ jobs:
       PIP_EXTRA_INDEX_URL: "https://dl.espressif.com/pypi"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
       - name: Set up Python 3.11
         uses: actions/setup-python@master
         with:
@@ -89,15 +89,15 @@ jobs:
           SHA=${COMMIT_SHA_LONG::7}
           rm package.json
           python ci/gen_pio_manifest.py -o "./" -s ${{ github.ref_name }} -c $SHA
-      - name: Archive stubs artifact
+      - name: Upload stubs artifact
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@master
+        uses: jason2866/upload-artifact@v2.0.3
         with:
           name: stubs
           path: /home/runner/work/esptool/esptool/flasher_stub/build
-      - name: Archive package.json artifact
+      - name: Upload package.json artifact
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@master
+        uses: jason2866/upload-artifact@v2.0.3
         with:
           name: manifest
           path: /home/runner/work/esptool/esptool/package.json
@@ -108,38 +108,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: jason2866/download-artifact@v3.0.4
         with:
-          fetch-depth: 0
-      - name: Download builded stubs
-        uses: actions/download-artifact@master
-        with:
-          name: stubs
-          path: ./mv_stubs
-      - name: Display structure of downloaded files
-        run: |
-          ls -R
-      - name: Move stubs in folder
-        run: |
-          rm ./esptool/targets/stub_flasher/*
-          cp -R ./mv_stubs/*.json ./esptool/targets/stub_flasher
-          ls -R ./esptool/targets/stub_flasher
-          rm -rf ./mv_stubs
-      - name: Download package.json (release tag set)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/download-artifact@master
-        with:
-          name: manifest
-          path: ./tmp
-      - name: Move package.json back
-        run: |
-          rm package.json
-          cp -R ./tmp/*.json ./
-          ls -R ./
-          rm -rf ./tmp
+          name: |
+            stubs
+            manifest
+          path: |
+           ./esptool/targets/stub_flasher
+           ./
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: package.json updated
+          commit_message: updated files
 
   release:
       name: Upload release binaries
