@@ -123,6 +123,8 @@ jobs:
       steps:
         - name: Download built binaries
           uses: actions/download-artifact@master
+        - name: Checkout repository
+          uses: actions/checkout@master
         - name: Rename and package binaries
           run: |
             echo "Packaging new esptool release: ${{ github.ref_name }}"
