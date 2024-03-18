@@ -126,6 +126,7 @@ jobs:
         - name: Rename and package binaries
           run: |
             echo "Packaging new esptool release: ${{ github.ref_name }}"
+            python ./ci/pack_python.py
             zip -r esptool-macos-arm.zip ./esptool-macos-arm
             zip -r esptool-macos.zip ./esptool-macos
             zip -r esptool-linux-amd64.zip ./esptool-linux-amd64
