@@ -119,6 +119,7 @@ jobs:
   release:
       name: Upload release binaries
       needs: build-esptool-binaries
+      if: startsWith(github.ref, 'refs/tags/')
       runs-on: ubuntu-latest
       steps:
         - name: Checkout repository
@@ -126,7 +127,7 @@ jobs:
         - name: Zip esptool.py
           run: |
             echo "Packaging new esptool release: ${{ github.ref_name }}"
-            #python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
+            python ci/patch_release.py --version ${{ github.ref_name }} esptool/__init__.py
             python ci/pack_python.py
         - name: Download built binaries
           uses: actions/download-artifact@master
@@ -138,7 +139,6 @@ jobs:
             zip -r esptool-win64.zip ./esptool-win64
         - name: Release
           uses: jason2866/action-gh-release@v1.3
-          if: startsWith(github.ref, 'refs/tags/')
           with:
             prerelease: true
             files: |
