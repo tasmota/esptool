@@ -130,10 +130,16 @@ jobs:
         uses: actions/download-artifact@master
         with:
           name: manifest
-          path: ./
+          path: ./tmp
+      - name: Move package.json back
+        run: |
+          rm package.json
+          cp -R ./tmp/*.json ./
+          ls -R ./
+          rm -rf ./tmp
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: Stubs updated
+          commit_message: package.json updated
 
   release:
       name: Upload release binaries
