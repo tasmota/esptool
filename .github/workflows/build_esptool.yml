@@ -46,6 +46,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller==5.13.2
+          python ci/patch_dev_release.py --version ${{ github.ref_name }} esptool/__init__.py
+          git diff
           pip install --user -e .
       - name: Build with PyInstaller
         run: |
@@ -120,6 +122,7 @@ jobs:
           uses: actions/download-artifact@master
         - name: Rename and package binaries
           run: |
+            echo "Packaging new esptool release: ${{ github.ref_name }}"
             zip -r esptool-macos-arm.zip ./esptool-macos-arm
             zip -r esptool-macos.zip ./esptool-macos
             zip -r esptool-linux-amd64.zip ./esptool-linux-amd64
