@@ -29,7 +29,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("file", help="Path to script with __version__")
     parser.add_argument(
-        "--version", help="Development version specifier to patch the version to"
+        "--version", help="Version specifier to patch the version to"
     )
     args = parser.parse_args()
     patch_file(args.file, args.version)
