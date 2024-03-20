@@ -7,7 +7,7 @@ import datetime
 
 MANIFEST_DATA = {
     "name": "tool-esptoolpy",
-    "description": "Serial bootloader utility for the Espressif ESP82xx, ESP32x series of SoCs",
+    "description": "A serial utility to communicate & flash code to Espressif chips",
     "keywords": ["tools", "uploader", "tasmota", "espressif", "esp8266", "esp32"],
     "license": "GPL-2.0-or-later",
     "repository": {
@@ -41,7 +41,7 @@ def convert_version(version_string):
     return ".".join((major, minor, patch))
 
 
-def main(dst_dir, version_string, commit_hash):
+def main(dst_dir, version_string):
 
     converted_version = convert_version(version_string)
     if not converted_version:
@@ -51,7 +51,7 @@ def main(dst_dir, version_string, commit_hash):
     manifest_file_path = os.path.join(dst_dir, "package.json")
     build_date = datetime.date.today()
     with open(manifest_file_path, "w", encoding="utf8") as fp:
-        MANIFEST_DATA["version"] = f"{converted_version}+sha.{commit_hash}"
+        MANIFEST_DATA["version"] = f"{converted_version}"
         MANIFEST_DATA["date"] = f"{build_date}"
         json.dump(MANIFEST_DATA, fp, indent=2)
 
@@ -75,15 +75,8 @@ if __name__ == "__main__":
         "--version-string",
         dest="version_string",
         required=True,
-        help="Version string in format v.*.*.*",
-    )
-    parser.add_argument(
-        "-c",
-        "--commit-hash",
-        dest="commit_hash",
-        required=True,
-        help="Esptool commit hash",
+        help="Version string in format v*.*.*",
     )
     args = parser.parse_args()
 
-    sys.exit(main(args.dst_dir, args.version_string, args.commit_hash))
+    sys.exit(main(args.dst_dir, args.version_string))
