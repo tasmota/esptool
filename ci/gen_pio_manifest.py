@@ -41,7 +41,7 @@ def convert_version(version_string):
     return ".".join((major, minor, patch))
 
 
-def main(dst_dir, version_string, commit_hash):
+def main(dst_dir, version_string):
 
     converted_version = convert_version(version_string)
     if not converted_version:
