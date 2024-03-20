@@ -154,7 +154,7 @@ jobs:
         - name: Release
           uses: jason2866/action-gh-release@v1.3
           with:
-            prerelease: true
+            prerelease: false
             files: |
               *.zip
           env:
