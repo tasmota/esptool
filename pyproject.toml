@@ -37,7 +37,6 @@
         "pyserial>=3.3",
         "reedsolo>=1.5.3,<1.8",
         "PyYAML>=5.1",
-        "intelhex",
         "rich_click",
     ]
 
