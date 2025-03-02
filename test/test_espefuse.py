@@ -1,8 +1,8 @@
 # HOST_TEST for espefuse.py using the pytest framework
 #
-# Supports esp32, esp32s2, esp32s3beta2, esp32s3,
-#          esp32c3, esp32h2beta1, esp32c2, esp32c6, esp32p4,
-#          esp32c61, esp32c5, esp32c5beta3.
+# Supports esp32, esp32s2, esp32s3, esp32c3,
+#          esp32c2, esp32c6, esp32p4, esp32c61,
+#          esp32c5,
 #
 # How to use:
 #
@@ -63,6 +63,12 @@ if arg_chip not in SUPPORTED_CHIPS:
 print(f"\nHost tests of espefuse.py for {arg_chip}:")
 print("Running espefuse.py tests...")
 
+# The default value of the program name for argparse has changed in Python 3.14
+# https://docs.python.org/dev/whatsnew/3.14.html#argparse
+ESPEFUSE_MODNAME = (
+    "__main__.py" if sys.version_info < (3, 14) else "python3 -m espefuse"
+)
+
 
 @pytest.mark.host_test
 class EfuseTestCase:
@@ -76,8 +82,7 @@ class EfuseTestCase:
             self._set_target_wafer_version()
         else:
             self.base_cmd = (
-                f"{sys.executable} -m espefuse --chip {arg_chip} "
-                f"--port {arg_port} -d"
+                f"{sys.executable} -m espefuse --chip {arg_chip} --port {arg_port} -d"
             )
             self.reset_efuses()
 
@@ -155,6 +160,7 @@ class EfuseTestCase:
                 shell=False,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 universal_newlines=True,
             )
             output, _ = p.communicate()
@@ -173,11 +179,13 @@ class EfuseTestCase:
 
 class TestReadCommands(EfuseTestCase):
     def test_help(self):
-        self.espefuse_not_virt_py("--help", check_msg="usage: __main__.py [-h]")
+        self.espefuse_not_virt_py("--help", check_msg=f"usage: {ESPEFUSE_MODNAME} [-h]")
         self.espefuse_not_virt_py(f"--chip {arg_chip} --help")
 
     def test_help2(self):
-        self.espefuse_not_virt_py("", check_msg="usage: __main__.py [-h]", ret_code=1)
+        self.espefuse_not_virt_py(
+            "", check_msg=f"usage: {ESPEFUSE_MODNAME} [-h]", ret_code=1
+        )
 
     def test_dump(self):
         self.espefuse_py("dump -h")
@@ -211,9 +219,6 @@ class TestReadCommands(EfuseTestCase):
             ret_code=2,
         )
 
-    @pytest.mark.skipif(
-        arg_chip == "esp32p4", reason="No Custom MAC Address defined yet"
-    )
     def test_get_custom_mac(self):
         self.espefuse_py("get_custom_mac -h")
         if arg_chip == "esp32":
@@ -229,11 +234,11 @@ class TestReadCommands(EfuseTestCase):
     def test_adc_info_2(self):
         if arg_chip == "esp32":
             self.espefuse_py("burn_efuse BLK3_PART_RESERVE 1")
-        elif arg_chip in ["esp32c3", "esp32s3", "esp32s3beta2"]:
+        elif arg_chip in ["esp32c3", "esp32s3"]:
             self.espefuse_py("burn_efuse BLK_VERSION_MAJOR 1")
         elif arg_chip in ["esp32c2", "esp32s2", "esp32c6"]:
             self.espefuse_py("burn_efuse BLK_VERSION_MINOR 1")
-        elif arg_chip in ["esp32h2", "esp32h2beta1", "esp32p4"]:
+        elif arg_chip in ["esp32h2", "esp32p4"]:
             self.espefuse_py("burn_efuse BLK_VERSION_MINOR 2")
         self.espefuse_py("adc_info")
 
@@ -243,8 +248,6 @@ class TestReadCommands(EfuseTestCase):
         self.espefuse_py("check_error --recovery")
 
 
-# TODO: [ESP32H21] IDF-11506
-@pytest.mark.skipif(arg_chip == "esp32h21", reason="Not supported yet")
 class TestReadProtectionCommands(EfuseTestCase):
     def test_read_protect_efuse(self):
         self.espefuse_py("read_protect_efuse -h")
@@ -329,7 +332,7 @@ class TestReadProtectionCommands(EfuseTestCase):
         else:
             key1_purpose = (
                 "USER"
-                if arg_chip in ["esp32p4", "esp32c61", "esp32c5", "esp32c5beta3"]
+                if arg_chip in ["esp32p4", "esp32c61", "esp32c5", "esp32h4"]
                 else "RESERVED"
             )
             self.espefuse_py(
@@ -385,8 +388,6 @@ class TestReadProtectionCommands(EfuseTestCase):
         )
 
 
-# TODO: [ESP32H21] IDF-11506
-@pytest.mark.skipif(arg_chip == "esp32h21", reason="Not supported yet")
 class TestWriteProtectionCommands(EfuseTestCase):
     def test_write_protect_efuse(self):
         self.espefuse_py("write_protect_efuse -h")
@@ -405,7 +406,7 @@ class TestWriteProtectionCommands(EfuseTestCase):
                            SPI_BOOT_CRYPT_CNT"""
             efuse_lists2 = "RD_DIS KEY_PURPOSE_0 KEY_PURPOSE_2"
         else:
-            efuse_lists = """RD_DIS DIS_ICACHE DIS_FORCE_DOWNLOAD
+            efuse_lists = """RD_DIS DIS_FORCE_DOWNLOAD
                            DIS_DOWNLOAD_MANUAL_ENCRYPT
                            USB_EXCHG_PINS WDT_DELAY_SEL SPI_BOOT_CRYPT_CNT
                            SECURE_BOOT_KEY_REVOKE0 SECURE_BOOT_KEY_REVOKE1
@@ -419,21 +420,21 @@ class TestWriteProtectionCommands(EfuseTestCase):
                            BLOCK_KEY2 BLOCK_KEY3 BLOCK_KEY4 BLOCK_KEY5"""
             if arg_chip not in [
                 "esp32h2",
-                "esp32h2beta1",
                 "esp32c6",
                 "esp32c61",
                 "esp32c5",
-                "esp32c5beta3",
+                "esp32h21",
+                "esp32h4",
             ]:
                 efuse_lists += """ DIS_DOWNLOAD_ICACHE
                             SPI_PAD_CONFIG_CLK SPI_PAD_CONFIG_Q
                             SPI_PAD_CONFIG_D SPI_PAD_CONFIG_CS SPI_PAD_CONFIG_HD
                             SPI_PAD_CONFIG_WP SPI_PAD_CONFIG_DQS SPI_PAD_CONFIG_D4
                             SPI_PAD_CONFIG_D5 SPI_PAD_CONFIG_D6 SPI_PAD_CONFIG_D7"""
-            efuse_lists2 = "RD_DIS DIS_ICACHE"
+            efuse_lists2 = "RD_DIS"
         self.espefuse_py(f"write_protect_efuse {efuse_lists}")
         output = self.espefuse_py(f"write_protect_efuse {efuse_lists2}")
-        assert output.count("is already write protected") == 2
+        assert output.count("is already write protected") >= 1
 
     def test_write_protect_efuse2(self):
         if arg_chip == "esp32":
@@ -446,7 +447,6 @@ class TestWriteProtectionCommands(EfuseTestCase):
             )
 
 
-@pytest.mark.skipif(arg_chip == "esp32p4", reason="No Custom MAC Address defined yet")
 class TestBurnCustomMacCommands(EfuseTestCase):
     def test_burn_custom_mac(self):
         self.espefuse_py("burn_custom_mac -h")
@@ -689,9 +689,6 @@ class TestBurnEfuseCommands(EfuseTestCase):
         assert "(Override SD_CMD pad (GPIO11/SPICS0)) 0b00000 -> 0b11111" in output
         assert "BURN BLOCK0  - OK (all write block bits are set)" in output
 
-    @pytest.mark.skipif(
-        arg_chip == "esp32p4", reason="No Custom MAC Address defined yet"
-    )
     def test_burn_mac_custom_efuse(self):
         crc_msg = "(OK)"
         self.espefuse_py("burn_efuse -h")
@@ -714,14 +711,6 @@ class TestBurnEfuseCommands(EfuseTestCase):
         self.espefuse_py("burn_efuse CUSTOM_MAC AA:CD:EF:01:02:03")
         self.espefuse_py("get_custom_mac", check_msg=f"aa:cd:ef:01:02:03 {crc_msg}")
 
-    # TODO: [ESP32H21] IDF-11506
-    @pytest.mark.skipif(
-        arg_chip
-        in [
-            "esp32h21",
-        ],
-        reason="No such eFuses, will be defined later",
-    )
     def test_burn_efuse(self):
         self.espefuse_py("burn_efuse -h")
         if arg_chip == "esp32":
@@ -748,7 +737,7 @@ class TestBurnEfuseCommands(EfuseTestCase):
                 SECURE_BOOT_EN 1 \
                 UART_PRINT_CONTROL 1"
             )
-            if arg_chip not in ["esp32c5", "esp32c5beta3", "esp32c61"]:
+            if arg_chip not in ["esp32h21", "esp32h4"]:
                 # chips having the OPTIONAL_UNIQUE_ID field
                 self.espefuse_py(
                     "burn_efuse \
@@ -956,14 +945,11 @@ class TestBurnKeyCommands(EfuseTestCase):
         not in [
             "esp32s2",
             "esp32s3",
-            "esp32s3beta1",
             "esp32c3",
-            "esp32h2beta1",
             "esp32c6",
             "esp32h2",
             "esp32p4",
             "esp32c5",
-            "esp32c5beta3",
             "esp32c61",
         ],
         reason="Only chips with 6 keys",
@@ -977,9 +963,7 @@ class TestBurnKeyCommands(EfuseTestCase):
             "esp32c3",
             "esp32c6",
             "esp32h2",
-            "esp32h2beta1",
             "esp32c5",
-            "esp32c5beta3",
         ]:
             cmd = cmd.replace("XTS_AES_256_KEY_1", "XTS_AES_128_KEY")
             cmd = cmd.replace("XTS_AES_256_KEY_2", "XTS_AES_128_KEY")
@@ -1147,7 +1131,7 @@ class TestBurnKeyCommands(EfuseTestCase):
         ) in output
 
     @pytest.mark.skipif(
-        arg_chip not in ["esp32h2", "esp32c5", "esp32c5beta3", "esp32c61", "esp32p4"],
+        arg_chip not in ["esp32h2", "esp32c5", "esp32c61", "esp32p4"],
         reason="These chips support ECDSA_KEY",
     )
     def test_burn_key_ecdsa_key(self):
@@ -1173,7 +1157,7 @@ class TestBurnKeyCommands(EfuseTestCase):
         ) in output
 
     @pytest.mark.skipif(
-        arg_chip not in ["esp32h2", "esp32c5", "esp32c5beta3", "esp32c61", "esp32p4"],
+        arg_chip not in ["esp32h2", "esp32c5", "esp32c61", "esp32p4"],
         reason="These chips support ECDSA_KEY",
     )
     def test_burn_key_ecdsa_key_check_byte_order(self):
@@ -1272,14 +1256,11 @@ class TestBurnBlockDataCommands(EfuseTestCase):
         not in [
             "esp32s2",
             "esp32s3",
-            "esp32s3beta1",
             "esp32c3",
-            "esp32h2beta1",
             "esp32c6",
             "esp32h2",
             "esp32p4",
             "esp32c5",
-            "esp32c5beta3",
             "esp32c61",
         ],
         reason="Only chip with 6 keys",
@@ -1415,14 +1396,11 @@ class TestBurnBlockDataCommands(EfuseTestCase):
         not in [
             "esp32s2",
             "esp32s3",
-            "esp32s3beta1",
             "esp32c3",
-            "esp32h2beta1",
             "esp32c6",
             "esp32h2",
             "esp32p4",
             "esp32c5",
-            "esp32c5beta3",
             "esp32c61",
         ],
         reason="Only chips with 6 keys",
@@ -1614,14 +1592,11 @@ class TestBurnKeyDigestCommandsEsp32C2(EfuseTestCase):
     not in [
         "esp32s2",
         "esp32s3",
-        "esp32s3beta1",
         "esp32c3",
-        "esp32h2beta1",
         "esp32c6",
         "esp32h2",
         "esp32p4",
         "esp32c5",
-        "esp32c5beta3",
         "esp32c61",
     ],
     reason="Supports 6 key blocks",
@@ -1729,14 +1704,11 @@ class TestBurnBitCommands(EfuseTestCase):
         not in [
             "esp32s2",
             "esp32s3",
-            "esp32s3beta1",
             "esp32c3",
-            "esp32h2beta1",
             "esp32c6",
             "esp32h2",
             "esp32p4",
             "esp32c5",
-            "esp32c5beta3",
             "esp32c61",
         ],
         reason="Only chip with 6 keys",
@@ -1867,8 +1839,6 @@ class TestByteOrderBurnKeyCommand(EfuseTestCase):
             )
 
 
-# TODO: [ESP32H21] IDF-11506
-@pytest.mark.skipif(arg_chip == "esp32h21", reason="Not supported yet")
 class TestExecuteScriptsCommands(EfuseTestCase):
     @classmethod
     def setup_class(self):
@@ -1881,7 +1851,7 @@ class TestExecuteScriptsCommands(EfuseTestCase):
         os.chdir(self.stored_dir)
 
     @pytest.mark.skipif(
-        arg_chip in ["esp32c2", "esp32p4"],
+        arg_chip in ["esp32c2", "esp32p4", "esp32h21", "esp32h4"],
         reason="These chips do not have eFuses used in this test",
     )
     def test_execute_scripts_with_check_that_only_one_burn(self):
@@ -1891,7 +1861,7 @@ class TestExecuteScriptsCommands(EfuseTestCase):
         self.espefuse_py("execute_scripts execute_efuse_script2.py")
 
     @pytest.mark.skipif(
-        arg_chip in ["esp32c2", "esp32p4"],
+        arg_chip in ["esp32c2", "esp32p4", "esp32h21", "esp32h4"],
         reason="These chips do not have eFuses used in this test",
     )
     def test_execute_scripts_with_check(self):
@@ -1973,17 +1943,17 @@ class TestMultipleCommands(EfuseTestCase):
 
         self.espefuse_py(
             f"-h {command1} {command2}",
-            check_msg="usage: __main__.py [-h]",
+            check_msg=f"usage: {ESPEFUSE_MODNAME} [-h]",
         )
 
         self.espefuse_py(
             f"{command1} -h {command2}",
-            check_msg="usage: __main__.py burn_key_digest [-h]",
+            check_msg=f"usage: {ESPEFUSE_MODNAME} burn_key_digest [-h]",
         )
 
         self.espefuse_py(
             f"{command1} {command2} -h",
-            check_msg="usage: __main__.py burn_key [-h]",
+            check_msg=f"usage: {ESPEFUSE_MODNAME} burn_key [-h]",
         )
 
     @pytest.mark.skipif(

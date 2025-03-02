@@ -3,8 +3,10 @@
 Basic Commands
 ==============
 
-Write Binary Data to Flash: write_flash
-----------------------------------------
+.. _write-flash:
+
+Write Binary Data to Flash: ``write_flash``
+-------------------------------------------
 
 Binary data can be written to the ESP's flash chip via the serial ``write_flash`` command:
 
@@ -75,14 +77,14 @@ Use the ``-e/--erase-all`` option to erase all flash sectors (not just the write
 
     .. only:: esp32
 
-        Overwriting the encrypted firmware (bootloader, application, etc.) without the ``--encrypt`` option is disabled, if `Flash Encryption <https://docs.espressif.com/projects/esp-idf/en/latest/{IDF_TARGET_PATH_NAME}/security/flash-encryption.html>`_ is enabled and Encrypted Download being disabled (efuse bit ``EFUSE_DISABLE_DL_ENCRYPT`` is set).
+        Overwriting the encrypted firmware (bootloader, application, etc.) without the ``--encrypt`` option is disabled, if `Flash Encryption <https://docs.espressif.com/projects/esp-idf/en/latest/{IDF_TARGET_PATH_NAME}/security/flash-encryption.html>`_ is enabled and Encrypted Download being disabled (eFuse bit ``EFUSE_DISABLE_DL_ENCRYPT`` is set).
 
     .. only:: not esp32
 
         Overwriting the encrypted firmware (bootloader, application, etc.) without the ``--encrypt`` option is disabled, if:
 
         *  `Flash Encryption <https://docs.espressif.com/projects/esp-idf/en/latest/{IDF_TARGET_PATH_NAME}/security/flash-encryption.html>`_ and Secure Download Mode are enabled or
-        *  `Flash Encryption <https://docs.espressif.com/projects/esp-idf/en/latest/{IDF_TARGET_PATH_NAME}/security/flash-encryption.html>`_ is enabled but Encrypted Download is disabled (efuse bit ``EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT`` is set).
+        *  `Flash Encryption <https://docs.espressif.com/projects/esp-idf/en/latest/{IDF_TARGET_PATH_NAME}/security/flash-encryption.html>`_ is enabled but Encrypted Download is disabled (eFuse bit ``EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT`` is set).
 
     This is a safety measure to prevent accidentally overwriting the encrypted firmware with a plaintext binary, which **can ultimately lead to bricking the device**.
 
@@ -96,8 +98,8 @@ Use the ``-e/--erase-all`` option to erase all flash sectors (not just the write
 
     This behavior can be overridden with the ``--force`` option.
 
-Read Flash Contents: read_flash
---------------------------------
+Read Flash Contents: ``read_flash``
+-----------------------------------
 
 The read_flash command allows reading back the contents of flash. The arguments to the command are an address, a size, and a filename to dump the output to. For example, to read a full 2MB of attached flash:
 
@@ -124,8 +126,8 @@ It is also possible to autodetect flash size by using ``ALL`` as size. The above
 
 .. _erase_flash:
 
-Erase Flash: erase_flash & erase_region
----------------------------------------
+Erase Flash: ``erase_flash`` & ``erase_region``
+-----------------------------------------------
 
 To erase the entire flash chip (all data replaced with 0xFF bytes):
 
@@ -152,8 +154,8 @@ The address and length must both be multiples of the SPI flash erase sector size
 
     This behavior can be overridden with the ``--force`` option. **Use this only at your own risk and only if you know what you are doing!**
 
-Read Built-in MAC Address: read_mac
-------------------------------------
+Read Built-in MAC Address: ``read_mac``
+---------------------------------------
 
 ::
 
@@ -161,8 +163,8 @@ Read Built-in MAC Address: read_mac
 
 .. _read-spi-flash-id:
 
-Read SPI Flash ID: flash_id
----------------------------
+Read SPI Flash ID: ``flash_id``
+-------------------------------
 
 ::
 
@@ -180,8 +182,8 @@ Refer to `flashrom source code <https://github.com/flashrom/flashrom/blob/master
 
 .. _elf-2-image:
 
-Convert ELF to Binary: elf2image
---------------------------------
+Convert ELF to Binary: ``elf2image``
+------------------------------------
 
 The ``elf2image`` command converts an ELF file (from compiler/linker output) into the binary executable images which can be flashed and then booted into:
 
@@ -222,29 +224,27 @@ By default, ``elf2image`` uses the sections in the ELF file to generate each seg
 
 .. _image-info:
 
-Output .bin Image Details: image_info
--------------------------------------
+Output .bin Image Details: ``image_info``
+-----------------------------------------
 
-The ``image_info`` command outputs some information (load addresses, sizes, etc) about a ``.bin`` file created by ``elf2image``. Command also supports ``.hex`` file created by ``merge_bin`` command from supported ``.bin`` files.
-
-To view more information about the image, such as set flash size, frequency and mode, or extended header information, use the ``--version 2`` option. This extended output will become the default in a future major release.
+The ``image_info`` command outputs some information (load addresses, segment sizes, set flash size, frequency, and mode, extended header information, etc) about a ``.bin`` file created by ``elf2image``. Command also supports ``.hex`` file created by ``merge_bin`` command from supported ``.bin`` files.
 
 This information corresponds to the headers described in :ref:`image-format`.
 
 ::
 
-    esptool.py image_info --version 2 my_esp_app.bin
+    esptool.py image_info my_esp_app.bin
 
 .. only:: not esp8266
 
-    If the given binary file is an application and a valid `ESP-IDF application header <https://docs.espressif.com/projects/esp-idf/en/latest/api-reference/system/app_image_format.html#application-description>`__ is detected in the image, specific fields describing the application are also displayed.
-
-    If the given binary file is a bootloader and a valid `ESP-IDF bootloader header <https://docs.espressif.com/projects/esp-idf/en/latest/api-reference/system/bootloader_image_format.html#bootloader-description>`__ is detected in the image, specific fields describing the bootloader are also displayed.
+    If the given binary file is an application with a valid `ESP-IDF application header <https://docs.espressif.com/projects/esp-idf/en/latest/api-reference/system/app_image_format.html#application-description>`__
+    or a bootloader with a valid `ESP-IDF bootloader header <https://docs.espressif.com/projects/esp-idf/en/latest/api-reference/system/bootloader_image_format.html#bootloader-description>`__
+    detected in the image, specific fields describing the application or bootloader are also displayed.
 
 .. _merge-bin:
 
-Merge Binaries for Flashing: merge_bin
---------------------------------------
+Merge Binaries for Flashing: ``merge_bin``
+------------------------------------------
 The ``merge_bin`` command will merge multiple binary files (of any kind) into a single file that can be flashed to a device later. Any gaps between the input files are padded based on the selected output format.
 
 For example:
