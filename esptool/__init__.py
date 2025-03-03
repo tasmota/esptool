@@ -15,7 +15,6 @@ __all__ = [
     "get_security_info",
     "image_info",
     "load_ram",
-    "make_image",
     "merge_bin",
     "read_flash",
     "read_flash_status",
@@ -24,6 +23,7 @@ __all__ = [
     "read_mem",
     "reset_chip",
     "run",
+    "run_stub",
     "verify_flash",
     "version",
     "write_flash",
@@ -54,7 +54,6 @@ from esptool.cmds import (
     get_security_info,
     image_info,
     load_ram,
-    make_image,
     merge_bin,
     read_flash,
     read_flash_status,
@@ -62,6 +61,7 @@ from esptool.cmds import (
     read_mem,
     reset_chip,
     run,
+    run_stub,
     verify_flash,
     version,
     write_flash,
@@ -121,7 +121,7 @@ click.rich_click.OPTION_GROUPS = {
             "name": "RAW options",
             "options": [
                 "--target-offset",
-                "--fill-flash-size",
+                "--pad-to-size",
             ],
         },
     ],
@@ -166,7 +166,6 @@ click.rich_click.COMMAND_GROUPS = {
                 "write_flash_status",
                 "read_flash_sfdp",
                 "chip_id",
-                "make_image",
                 "run",
                 "get_security_info",
             ],
@@ -449,36 +448,7 @@ def prepare_esp_object(ctx):
     ############################
 
     if not ctx.obj["no_stub"]:
-        if esp.secure_download_mode:
-            log.warning(
-                "Stub loader is not supported in Secure Download Mode, "
-                "it has been disabled. Set --no-stub to suppress this warning."
-            )
-        elif not esp.IS_STUB and esp.stub_is_disabled:
-            log.warning(
-                "Stub loader has been disabled for compatibility, "
-                "set --no-stub to suppress this warning."
-            )
-        elif esp.CHIP_NAME in [
-            "ESP32-H21",
-            "ESP32-H4",
-        ]:  # TODO: [ESP32H21] IDF-11509   [ESP32H4] IDF-12271
-            log.warning(
-                f"Stub loader is not yet supported on {esp.CHIP_NAME}, "
-                "it has been disabled. Set --no-stub to suppress this warning."
-            )
-        else:
-            try:
-                esp = esp.run_stub()
-            except Exception:
-                # The CH9102 bridge (PID: 0x55D4) can have issues on MacOS
-                if sys.platform == "darwin" and esp._get_pid() == 0x55D4:
-                    log.print()
-                    log.note(
-                        "If issues persist, "
-                        "try installing the WCH USB-to-Serial MacOS driver."
-                    )
-                raise
+        esp = run_stub(esp)
 
     # 4) Configure the baud rate and voltage regulator
     ##################################################
@@ -597,9 +567,9 @@ def write_mem_cli(ctx, address, value, mask):
     "filename, separated by space.",
 )
 @click.option(
-    "--ignore-flash-encryption-efuse-setting",
+    "--ignore-flash-enc-efuse",
     is_flag=True,
-    help="Ignore flash encryption efuse settings",
+    help="Ignore flash encryption eFuse settings",
 )
 @click.option(
     "--force",
@@ -658,26 +628,6 @@ def run_cli(ctx):
 def image_info_cli(ctx, filename):
     """Dump headers from a binary file (bootloader or application)"""
     image_info(filename, ctx.obj["chip"])
-
-
-@cli.command("make_image")
-@click.argument("output", type=click.Path())
-@click.option(
-    "--segfile",
-    "-f",
-    multiple=True,
-    type=click.Path(exists=True),
-    help="Segment input file",
-)
-@click.option(
-    "--segaddr", "-a", multiple=True, type=AnyIntType(), help="Segment base address"
-)
-@click.option(
-    "--entrypoint", "-e", type=AnyIntType(), default=0, help="Address of entry point"
-)
-def make_image_cli(output, segfile, segaddr, entrypoint):
-    """Create an application image from binary files"""
-    make_image(segfile, segaddr, output, entrypoint)
 
 
 @cli.command("elf2image")
@@ -953,12 +903,12 @@ def read_flash_sfdp_cli(ctx, address, bytes, **kwargs):
     help="Target offset where the output file will be flashed",
 )
 @click.option(  # RAW only
-    "--fill-flash-size",
+    "--pad-to-size",
     type=click.Choice(
         ["256KB", "512KB", "1MB", "2MB", "4MB", "8MB", "16MB", "32MB", "64MB", "128MB"]
     ),
-    help="If set, the final binary file will be padded with FF bytes up to this flash "
-    "size.",
+    help="If set, the final binary file will be padded with 0xFF bytes up to this flash"
+    " size.",
 )
 @add_spi_flash_options(allow_keep=True, auto_detect=False)
 @click.pass_context
