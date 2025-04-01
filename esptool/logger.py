@@ -121,6 +121,7 @@ class EsptoolLogger(TemplateLogger):
             )
         else:
             print(message)
+            sys.stdout.flush()
 
     def set_progress(self, percentage: float):
         """
