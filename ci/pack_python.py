@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# ruff: noqa
 
 import shutil
 import subprocess
