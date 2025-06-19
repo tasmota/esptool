@@ -124,7 +124,7 @@
     ]
 
     # ignore release helper
-    extend-exclude = ["ci/pack_python.py", "ci/gen_pio_manifest.py", "ci/gen_pio_manifest.py"]
+    extend-exclude = ["ci/pack_python.py", "ci/gen_pio_manifest.py", "ci/gen_pio_manifest.py", "package.json]
 
     line-length = 88
     target-version = "py310"
