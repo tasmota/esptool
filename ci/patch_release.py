@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+# ruff: noqa
 import argparse
 import re
 
