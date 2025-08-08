@@ -250,8 +250,8 @@ def load_ecdsa_signing_key(keyfile: IO) -> ec.EllipticCurvePrivateKey:
             "Incorrect ECDSA private key specified. "
             "Please check algorithm and/or format."
         )
-    if not isinstance(sk.curve, (ec.SECP192R1, ec.SECP256R1)):
-        raise esptool.FatalError("Supports NIST192p and NIST256p keys only.")
+    if not isinstance(sk.curve, (ec.SECP192R1, ec.SECP256R1, ec.SECP384R1)):
+        raise esptool.FatalError("Supports NIST192p, NIST256p and NIST384p keys only.")
     return sk
 
 
@@ -1957,7 +1957,11 @@ def main(argv: list[str] | None = None):
     Arguments and their values need to be added as individual items to the list
     e.g. "--port /dev/ttyUSB1" thus becomes ['--port', '/dev/ttyUSB1'].
     """
-    cli(args=argv)
+    try:
+        cli(args=argv)
+    except SystemExit as e:
+        if e.code != 0:
+            raise
 
 
 def _main():
