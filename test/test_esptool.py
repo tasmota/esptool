@@ -76,7 +76,7 @@ TEST_DIR = os.path.abspath(os.path.dirname(__file__))
 print("Running esptool tests...")
 
 
-class ESPRFC2217Server(object):
+class ESPRFC2217Server:
     """Creates a virtual serial port accessible through rfc2217 port."""
 
     def __init__(self, rfc2217_port=None):
@@ -326,7 +326,7 @@ class EsptoolTestCase:
         # "Hello world" data without unwanted chip reset.
         with serial.serial_for_url(arg_port, arg_baud, rtscts=True) as p:
             p.timeout = 5
-            output = p.read(100)
+            output = p.read(200)
             print(f"Output: {output}")
             assert any(item in output for item in expected_out)
 
@@ -445,7 +445,8 @@ class TestFlashing(EsptoolTestCase):
     @pytest.mark.skipif(arg_chip != "esp32", reason="Don't need to test multiple times")
     def test_short_flash_deprecated(self):
         out = self.run_esptool(
-            "--before default_reset write_flash 0x0 images/one_kb.bin --flash_size keep"
+            "--before default_reset write_flash 0x0 images/one_kb.bin "
+            "--flash_size keep --flash_mode=keep"
         )
         assert (
             "Deprecated: Choice 'default_reset' for option '--before' is deprecated. "
@@ -454,6 +455,10 @@ class TestFlashing(EsptoolTestCase):
         assert (
             "Deprecated: Option '--flash_size' is deprecated. "
             "Use '--flash-size' instead." in out
+        )
+        assert (
+            "Deprecated: Option '--flash_mode' is deprecated. "
+            "Use '--flash-mode' instead." in out
         )
         assert (
             "Deprecated: Command 'write_flash' is deprecated. "
@@ -1240,7 +1245,7 @@ class TestKeepImageSettings(EsptoolTestCase):
 
     @classmethod
     def setup_class(self):
-        super(TestKeepImageSettings, self).setup_class()
+        super().setup_class()
         self.BL_IMAGE = f"images/bootloader_{arg_chip}.bin"
         self.flash_offset = esptool.CHIP_DEFS[arg_chip].BOOTLOADER_FLASH_OFFSET
         with open(self.BL_IMAGE, "rb") as f:

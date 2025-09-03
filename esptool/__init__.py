@@ -785,10 +785,10 @@ def image_info_cli(ctx, filename: list[tuple[int | None, t.IO[bytes]]]):
 )
 @click.option(
     "--pad-to-size",
-    type=int,
+    type=str,
     default=None,
     help="The block size to pad the final binary image to. "
-    "Value 0xFF is used for padding.",
+    "Value 0xFF is used for padding. Supports MB, KB suffixes.",
 )
 @click.option(
     "--ram-only-header",
@@ -1082,7 +1082,7 @@ def expand_file_arguments(argv: list[str]) -> list[str]:
     for arg in argv:
         if arg.startswith("@"):
             expanded = True
-            with open(arg[1:], "r") as f:
+            with open(arg[1:]) as f:
                 for line in f.readlines():
                     new_args += shlex.split(line)
         else:
@@ -1119,12 +1119,7 @@ def connect_loop(
                 log.print("")
             esp.connect(before)
             return esp
-        except (
-            FatalError,
-            serial.serialutil.SerialException,
-            IOError,
-            OSError,
-        ) as err:
+        except (FatalError, serial.serialutil.SerialException, OSError) as err:
             if esp and esp._port:
                 esp._port.close()
             esp = None
