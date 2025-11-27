@@ -1,12 +1,11 @@
-# This file describes eFuses for ESP32-P4 chip
+# This file describes eFuses for ESP32-S31 chip
 #
-# SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import binascii
 import struct
-import sys
 import time
 
 from bitstring import BitArray
@@ -66,16 +65,13 @@ class EspEfuses(base_fields.EspEfusesBase):
     ):
         super().__init__(esp, skip_connect, debug, do_not_confirm, extend_efuse_table)
         self.Blocks = EfuseDefineBlocks()
-        chip_revision = 300 if skip_connect else esp.get_chip_revision()
-        revision_file = "esp32p4_v3.0" if chip_revision >= 300 else None
-        log.print(f"Loading eFuses for {esp.CHIP_NAME} v{chip_revision / 100:.1f}...")
-        self.Fields = EfuseDefineFields(extend_efuse_table, revision=revision_file)
+        self.Fields = EfuseDefineFields(extend_efuse_table)
         self.REGS = EfuseDefineRegisters
         self.BURN_BLOCK_DATA_NAMES = self.Blocks.get_burn_block_data_names()
         self.BLOCKS_FOR_KEYS = self.Blocks.get_blocks_for_keys()
-        if esp.CHIP_NAME != "ESP32-P4":
+        if esp.CHIP_NAME != "ESP32-S31":
             raise esptool.FatalError(
-                f"Expected the 'esp' param for ESP32-P4 chip but got for '{esp.CHIP_NAME}'."
+                f"Expected the 'esp' param for ESP32-S31 chip but got for '{esp.CHIP_NAME}'."
             )
         if not skip_connect:
             flags = self._esp.get_security_info()["flags"]
@@ -100,7 +96,7 @@ class EspEfuses(base_fields.EspEfusesBase):
                 for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES
             ]
         else:
-            if self.get_block_version() >= 1:
+            if False:  # self["BLK_VERSION_MINOR"].get() == 1:
                 self.efuses += [
                     EfuseField.convert(self, efuse)
                     for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES
@@ -212,7 +208,7 @@ class EspEfuses(base_fields.EspEfusesBase):
                     )
                     log.print("DIS_DOWNLOAD_MODE is enabled.")
                     log.print("Successful.")
-                    sys.exit(0)  # finish without errors
+                    exit(0)  # finish without errors
                 raise
 
             log.print("Established a connection with the chip.")
@@ -226,18 +222,19 @@ class EspEfuses(base_fields.EspEfusesBase):
                     )
                     log.print("ENABLE_SECURITY_DOWNLOAD is enabled.")
                     log.print("Successful.")
-                    sys.exit(0)  # finish without errors
+                    exit(0)  # finish without errors
             raise
 
     def set_efuse_timing(self):
         """Set timing registers for burning efuses"""
         # Configure clock
         apb_freq = self.get_crystal_freq()
-        if apb_freq != 40:
+        if apb_freq != 32:
             raise esptool.FatalError(
-                f"The eFuse supports only xtal=40M (xtal was {apb_freq}"
+                f"The eFuse supports only xtal=32M (xtal was {apb_freq}"
             )
-        # keep default timing settings
+
+        # TODO: [ESP32S31] IDF-12268
 
     def get_coding_scheme_warnings(self, silent=False):
         """Check if the coding scheme has detected any errors."""
@@ -290,57 +287,13 @@ class EfuseField(base_fields.EfuseFieldBase):
             "t_sensor": EfuseTempSensor,
             "adc_tp": EfuseAdcPointCalibration,
             "wafer": EfuseWafer,
-            "recovery_bootloader": EfuseBtldrRecoveryField,
         }.get(efuse.class_type, EfuseField)(parent, efuse)
-
-
-class EfuseBtldrRecoveryField(EfuseField):
-    """
-    Handles composite recovery bootloader flash sector fields for ESP32-P4 ECO5 (v3.0).
-    Combines/splits the following eFuse fields:
-      - RECOVERY_BOOTLOADER_FLASH_SECTOR_0_1  (bits 1:0, uint:2)
-      - RECOVERY_BOOTLOADER_FLASH_SECTOR_2_2  (bit 2, bool)
-      - RECOVERY_BOOTLOADER_FLASH_SECTOR_3_6  (bits 6:3, uint:4)
-      - RECOVERY_BOOTLOADER_FLASH_SECTOR_7_7  (bit 7, bool)
-      - RECOVERY_BOOTLOADER_FLASH_SECTOR_8_10 (bits 10:8, uint:3)
-      - RECOVERY_BOOTLOADER_FLASH_SECTOR_11_11(bit 11, bool)
-    """
-
-    FIELD_ORDER = [
-        ("RECOVERY_BOOTLOADER_FLASH_SECTOR_0_1", 0, 2),
-        ("RECOVERY_BOOTLOADER_FLASH_SECTOR_2_2", 2, 1),
-        ("RECOVERY_BOOTLOADER_FLASH_SECTOR_3_6", 3, 4),
-        ("RECOVERY_BOOTLOADER_FLASH_SECTOR_7_7", 7, 1),
-        ("RECOVERY_BOOTLOADER_FLASH_SECTOR_8_10", 8, 3),
-        ("RECOVERY_BOOTLOADER_FLASH_SECTOR_11_11", 11, 1),
-    ]
-
-    def get(self, from_read=True):
-        value = 0
-        for field_name, bit_offset, bit_len in self.FIELD_ORDER:
-            field = self.parent[field_name]
-            field_val = field.get(from_read)
-            assert field.bit_len == bit_len
-            value |= (field_val & ((1 << bit_len) - 1)) << bit_offset
-        return value
-
-    def save(self, new_value):
-        for field_name, bit_offset, bit_len in self.FIELD_ORDER:
-            field = self.parent[field_name]
-            field_val = (new_value >> bit_offset) & ((1 << bit_len) - 1)
-            field.save(field_val)
-            log.print(
-                f"\t    - '{field.name}' {field.get_bitstring()} -> {field.get_bitstring(from_read=False)}"
-            )
 
 
 class EfuseWafer(EfuseField):
     def get(self, from_read=True):
-        hi_bits = self.parent["WAFER_VERSION_MAJOR_HI"].get(from_read)
-        assert self.parent["WAFER_VERSION_MAJOR_HI"].bit_len == 1
-        lo_bits = self.parent["WAFER_VERSION_MAJOR_LO"].get(from_read)
-        assert self.parent["WAFER_VERSION_MAJOR_LO"].bit_len == 2
-        return (hi_bits << 2) + lo_bits
+        # TODO: [ESP32S31] IDF-12268
+        return 0
 
     def save(self, new_value):
         raise esptool.FatalError(f"Burning {self.name} is not supported")
@@ -393,7 +346,7 @@ class EfuseMacField(EfuseField):
     def check(self):
         errs, fail = self.parent.get_block_errors(self.block)
         if errs != 0 or fail:
-            output = f"Block{self.block} has ERRORS:{errs} FAIL:{fail}."
+            output = f"Block{self.block} has ERRORS:{errs} FAIL:{fail}"
         else:
             output = "OK"
         return "(" + output + ")"
@@ -425,19 +378,15 @@ class EfuseMacField(EfuseField):
         else:
             # Writing the BLOCK1 (MAC_SPI_8M_0) default MAC is not possible,
             # as it's written in the factory.
-            raise esptool.FatalError(f"Burning {self.name} is not supported.")
+            raise esptool.FatalError(f"Burning {self.name} is not supported")
 
 
 # fmt: off
 class EfuseKeyPurposeField(EfuseField):
-    key_purpose_len = 5  # bits for key purpose
-    KeyPurposeType = tuple[str, int, str | None, str | None, str]
-    KEY_PURPOSES: list[KeyPurposeType] = [
+    # TODO: [ESP32S31] IDF-12268 need check
+    KEY_PURPOSES = [
         ("USER",                         0,  None,       None,      "no_need_rd_protect"),   # User purposes (software-only use)
-        ("ECDSA_KEY_P256",               1,  None,       "Reverse", "need_rd_protect"),      # ECDSA key P256
         ("ECDSA_KEY",                    1,  None,       "Reverse", "need_rd_protect"),      # ECDSA key
-        ("XTS_AES_256_KEY_1",            2,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_256_KEY_1 (flash/PSRAM encryption)
-        ("XTS_AES_256_KEY_2",            3,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_256_KEY_2 (flash/PSRAM encryption)
         ("XTS_AES_128_KEY",              4,  None,       "Reverse", "need_rd_protect"),      # XTS_AES_128_KEY (flash/PSRAM encryption)
         ("HMAC_DOWN_ALL",                5,  None,       None,      "need_rd_protect"),      # HMAC Downstream mode
         ("HMAC_DOWN_JTAG",               6,  None,       None,      "need_rd_protect"),      # JTAG soft enable key (uses HMAC Downstream mode)
@@ -447,21 +396,9 @@ class EfuseKeyPurposeField(EfuseField):
         ("SECURE_BOOT_DIGEST1",          10, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST1 (Secure Boot key digest)
         ("SECURE_BOOT_DIGEST2",          11, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST2 (Secure Boot key digest)
         ("KM_INIT_KEY",                  12, None,       None,      "need_rd_protect"),      # init key that is used for the generation of AES/ECDSA key
-        ("XTS_AES_256_KEY",              -1, "VIRTUAL",  None,      "no_need_rd_protect"),   # Virtual purpose splits to XTS_AES_256_KEY_1 and XTS_AES_256_KEY_2
-        ("ECDSA_KEY_P192",               16, None,       "Reverse", "need_rd_protect"),      # ECDSA key P192
-        ("ECDSA_KEY_P384_L",             17, None,       "Reverse", "need_rd_protect"),      # ECDSA key P384 low
-        ("ECDSA_KEY_P384_H",             18, None,       "Reverse", "need_rd_protect"),      # ECDSA key P384 high
-        ("ECDSA_KEY_P384",               -3, "VIRTUAL",  None,      "need_rd_protect"),      # Virtual purpose splits to ECDSA_KEY_P384_L and ECDSA_KEY_P384_H
     ]
-    CUSTOM_KEY_PURPOSES: list[KeyPurposeType] = []
-    for id in range(0, 1 << key_purpose_len):
-        if id not in [p[1] for p in KEY_PURPOSES]:
-            CUSTOM_KEY_PURPOSES.append((f"CUSTOM_{id}", id, None, None, "no_need_rd_protect"))
-            CUSTOM_KEY_PURPOSES.append((f"CUSTOM_DIGEST_{id}", id, "DIGEST", None, "no_need_rd_protect"))
-    CUSTOM_KEY_PURPOSES.append(("CUSTOM_MAX", (1 << key_purpose_len) - 1, None, None, "no_need_rd_protect"))
-    CUSTOM_KEY_PURPOSES.append(("CUSTOM_DIGEST_MAX", (1 << key_purpose_len) - 1, "DIGEST", None, "no_need_rd_protect"))
-    KEY_PURPOSES += CUSTOM_KEY_PURPOSES
 # fmt: on
+
     KEY_PURPOSES_NAME = [name[0] for name in KEY_PURPOSES]
     DIGEST_KEY_PURPOSES = [name[0] for name in KEY_PURPOSES if name[2] == "DIGEST"]
 
@@ -475,9 +412,9 @@ class EfuseKeyPurposeField(EfuseField):
                 break
         if raw_val.isdigit():
             if int(raw_val) not in [p[1] for p in self.KEY_PURPOSES if p[1] > 0]:
-                raise esptool.FatalError(f"'{raw_val}' can not be set (value out of range).")
+                raise esptool.FatalError(f"'{raw_val}' can not be set (value out of range)")
         else:
-            raise esptool.FatalError(f"'{raw_val}' unknown name.")
+            raise esptool.FatalError(f"'{raw_val}' unknown name")
         return raw_val
 
     def need_reverse(self, new_key_purpose):
@@ -491,25 +428,9 @@ class EfuseKeyPurposeField(EfuseField):
                 return key[4] == "need_rd_protect"
 
     def get(self, from_read=True):
-        # Handle special case for KEY_PURPOSE_<digit>_H fields (e.g., KEY_PURPOSE_0_H ... KEY_PURPOSE_9_H)
-        if self.name.startswith("KEY_PURPOSE_") and self.name.endswith("_H"):
-            return self.get_raw(from_read)
-        else:
-            if any(
-                efuse is not None
-                and getattr(efuse, "name", None) == "KEY_PURPOSE_0_H"
-                for efuse in self.parent
-            ):  # check if the hi bit field for KEY_PURPOSE_.. exists
-                hi_bits = self.parent[f"{self.name}_H"].get_raw(from_read)
-                assert self.parent[f"{self.name}_H"].bit_len == 1
-                lo_bits = self.parent[f"{self.name}"].get_raw(from_read)
-                assert self.parent[f"{self.name}"].bit_len == 4
-                raw_val = (hi_bits << 4) + lo_bits
-            else:
-                raw_val = self.get_raw(from_read)
-            for p in self.KEY_PURPOSES:
-                if p[1] == raw_val:
-                    return p[0]
+        for p in self.KEY_PURPOSES:
+            if p[1] == self.get_raw(from_read):
+                return p[0]
         return "FORBIDDEN_STATE"
 
     def get_name(self, raw_val):
@@ -519,31 +440,4 @@ class EfuseKeyPurposeField(EfuseField):
 
     def save(self, new_value):
         raw_val = int(self.check_format(str(new_value)))
-        # Check if _H field exists (5-bit key purpose split into lo/hi)
-        if (any(
-                efuse is not None
-                and getattr(efuse, "name", None) == "KEY_PURPOSE_0_H"
-                for efuse in self.parent
-            )
-            and self.name.startswith("KEY_PURPOSE_")
-            and not self.name.endswith("_H")
-        ):
-            FIELD_ORDER = [
-                (self.name, 0),  # lo bits (bits 0-3)
-                (f"{self.name}_H", 4),  # hi bit (bit 4)
-            ]
-            for field_name, bit_offset in FIELD_ORDER:
-                field = self.parent[field_name]
-                field_val = (raw_val >> bit_offset) & ((1 << field.bit_len) - 1)
-                print(field_val, field_name)
-                if field_val != 0:
-                    if field_name.endswith("_H"):
-                        field.save(field_val)
-                    else:
-                        super().save(field_val)
-                    log.print(
-                        f"\t    - '{field.name}' {field.get_bitstring()} -> {field.get_bitstring(from_read=False)}"
-                    )
-        else:
-            # Single field, just save as usual
-            super().save(raw_val)
+        return super().save(raw_val)

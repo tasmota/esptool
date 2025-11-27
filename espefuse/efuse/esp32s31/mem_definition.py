@@ -1,6 +1,6 @@
-# This file describes eFuses fields and registers for ESP32-P4 chip
+# This file describes eFuses fields and registers for ESP32-S31 chip
 #
-# SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -12,7 +12,6 @@ from ..mem_definition_base import (
     EfuseBlocksBase,
     EfuseFieldsBase,
     EfuseRegistersBase,
-    Field,
 )
 
 
@@ -20,25 +19,28 @@ class EfuseDefineRegisters(EfuseRegistersBase):
     EFUSE_MEM_SIZE = 0x01FC + 4
 
     # EFUSE registers & command/conf values
-    DR_REG_EFUSE_BASE = 0x5012D000
+    DR_REG_EFUSE_BASE = 0x20715000
     EFUSE_PGM_DATA0_REG = DR_REG_EFUSE_BASE
     EFUSE_CHECK_VALUE0_REG = DR_REG_EFUSE_BASE + 0x020
     EFUSE_CLK_REG = DR_REG_EFUSE_BASE + 0x1C8
     EFUSE_CONF_REG = DR_REG_EFUSE_BASE + 0x1CC
-    EFUSE_STATUS_REG = DR_REG_EFUSE_BASE + 0x1D0
-    EFUSE_CMD_REG = DR_REG_EFUSE_BASE + 0x1D4
-    EFUSE_RD_RS_ERR0_REG = DR_REG_EFUSE_BASE + 0x1C0
-    EFUSE_RD_RS_ERR1_REG = DR_REG_EFUSE_BASE + 0x1C4
-    EFUSE_RD_REPEAT_ERR0_REG = DR_REG_EFUSE_BASE + 0x17C
-    EFUSE_RD_REPEAT_ERR1_REG = DR_REG_EFUSE_BASE + 0x180
-    EFUSE_RD_REPEAT_ERR2_REG = DR_REG_EFUSE_BASE + 0x184
-    EFUSE_RD_REPEAT_ERR3_REG = DR_REG_EFUSE_BASE + 0x188
-    EFUSE_RD_REPEAT_ERR4_REG = DR_REG_EFUSE_BASE + 0x18C
-    EFUSE_DAC_CONF_REG = DR_REG_EFUSE_BASE + 0x1E8
-    EFUSE_RD_TIM_CONF_REG = DR_REG_EFUSE_BASE + 0x1EC
-    EFUSE_WR_TIM_CONF1_REG = DR_REG_EFUSE_BASE + 0x1F0
-    EFUSE_WR_TIM_CONF2_REG = DR_REG_EFUSE_BASE + 0x1F4
-    EFUSE_DATE_REG = DR_REG_EFUSE_BASE + 0x1FC
+    EFUSE_STATUS_REG = DR_REG_EFUSE_BASE + 0x1D4
+    EFUSE_CMD_REG = DR_REG_EFUSE_BASE + 0x1D8
+    EFUSE_RD_RS_ERR0_REG = DR_REG_EFUSE_BASE + 0x188
+    EFUSE_RD_RS_ERR1_REG = DR_REG_EFUSE_BASE + 0x18C
+    EFUSE_RD_REPEAT_ERR0_REG = DR_REG_EFUSE_BASE + 0x168
+    EFUSE_RD_REPEAT_ERR1_REG = DR_REG_EFUSE_BASE + 0x16C
+    EFUSE_RD_REPEAT_ERR2_REG = DR_REG_EFUSE_BASE + 0x170
+    EFUSE_RD_REPEAT_ERR3_REG = DR_REG_EFUSE_BASE + 0x174
+    EFUSE_RD_REPEAT_ERR4_REG = DR_REG_EFUSE_BASE + 0x178
+    EFUSE_RD_REPEAT_ERR5_REG = DR_REG_EFUSE_BASE + 0x17C
+    EFUSE_RD_REPEAT_ERR6_REG = DR_REG_EFUSE_BASE + 0x180
+    EFUSE_RD_REPEAT_ERR7_REG = DR_REG_EFUSE_BASE + 0x184
+    EFUSE_DAC_CONF_REG = DR_REG_EFUSE_BASE + 0x1EC
+    EFUSE_RD_TIM_CONF_REG = DR_REG_EFUSE_BASE + 0x1F0
+    EFUSE_WR_TIM_CONF1_REG = DR_REG_EFUSE_BASE + 0x1F4
+    EFUSE_WR_TIM_CONF2_REG = DR_REG_EFUSE_BASE + 0x1F8
+    EFUSE_DATE_REG = DR_REG_EFUSE_BASE + 0x190
     EFUSE_WRITE_OP_CODE = 0x5A5A
     EFUSE_READ_OP_CODE = 0x5AA5
     EFUSE_PGM_CMD_MASK = 0x3
@@ -56,7 +58,6 @@ class EfuseDefineRegisters(EfuseRegistersBase):
         (EFUSE_RD_RS_ERR0_REG, 0x7, 20, 23),  # BLOCK_KEY2
         (EFUSE_RD_RS_ERR0_REG, 0x7, 24, 27),  # BLOCK_KEY3
         (EFUSE_RD_RS_ERR0_REG, 0x7, 28, 31),  # BLOCK_KEY4
-        (EFUSE_RD_RS_ERR1_REG, 0x7, 0, 3),  # BLOCK_KEY5
         (EFUSE_RD_RS_ERR1_REG, 0x7, 4, 7),  # BLOCK_SYS_DATA2
     ]
 
@@ -84,17 +85,16 @@ class EfuseDefineBlocks(EfuseBlocksBase):
     # fmt: off
     BLOCKS = [
         # Name,             Alias,     Index,  Read address,           Write address,  Write protect bit, Read protect bit, Len, key_purpose
-        ("BLOCK0",          [],          0,  __base_rd_regs + 0x02C, __base_wr_regs, None, None, 6, None),
-        ("MAC_SPI_8M_0",    ["BLOCK1"],  1,  __base_rd_regs + 0x044, __base_wr_regs, 20,   None, 6, None),
-        ("BLOCK_SYS_DATA",  ["BLOCK2"],  2,  __base_rd_regs + 0x05C, __base_wr_regs, 21,   None, 8, None),
-        ("BLOCK_USR_DATA",  ["BLOCK3"],  3,  __base_rd_regs + 0x07C, __base_wr_regs, 22,   None, 8, None),
-        ("BLOCK_KEY0",      ["BLOCK4"],  4,  __base_rd_regs + 0x09C, __base_wr_regs, 23,   0,    8, "KEY_PURPOSE_0"),
-        ("BLOCK_KEY1",      ["BLOCK5"],  5,  __base_rd_regs + 0x0BC, __base_wr_regs, 24,   1,    8, "KEY_PURPOSE_1"),
-        ("BLOCK_KEY2",      ["BLOCK6"],  6,  __base_rd_regs + 0x0DC, __base_wr_regs, 25,   2,    8, "KEY_PURPOSE_2"),
-        ("BLOCK_KEY3",      ["BLOCK7"],  7,  __base_rd_regs + 0x0FC, __base_wr_regs, 26,   3,    8, "KEY_PURPOSE_3"),
-        ("BLOCK_KEY4",      ["BLOCK8"],  8,  __base_rd_regs + 0x11C, __base_wr_regs, 27,   4,    8, "KEY_PURPOSE_4"),
-        ("BLOCK_KEY5",      ["BLOCK9"],  9,  __base_rd_regs + 0x13C, __base_wr_regs, 28,   5,    8, "KEY_PURPOSE_5"),
-        ("BLOCK_SYS_DATA2", ["BLOCK10"], 10, __base_rd_regs + 0x15C, __base_wr_regs, 29,   6,    8, None),
+        ("BLOCK0",          [],          0,  __base_rd_regs + 0x02C, __base_wr_regs, None, None, 9, None),
+        ("MAC_SPI_8M_0",    ["BLOCK1"],  1,  __base_rd_regs + 0x050, __base_wr_regs, 20,   None, 6, None),
+        ("BLOCK_SYS_DATA",  ["BLOCK2"],  2,  __base_rd_regs + 0x068, __base_wr_regs, 21,   None, 8, None),
+        ("BLOCK_USR_DATA",  ["BLOCK3"],  3,  __base_rd_regs + 0x088, __base_wr_regs, 22,   None, 8, None),
+        ("BLOCK_KEY0",      ["BLOCK4"],  4,  __base_rd_regs + 0x0A8, __base_wr_regs, 23,   0,    8, "KEY_PURPOSE_0"),
+        ("BLOCK_KEY1",      ["BLOCK5"],  5,  __base_rd_regs + 0x0C8, __base_wr_regs, 24,   1,    8, "KEY_PURPOSE_1"),
+        ("BLOCK_KEY2",      ["BLOCK6"],  6,  __base_rd_regs + 0x0E8, __base_wr_regs, 25,   2,    8, "KEY_PURPOSE_2"),
+        ("BLOCK_KEY3",      ["BLOCK7"],  7,  __base_rd_regs + 0x108, __base_wr_regs, 26,   3,    8, "KEY_PURPOSE_3"),
+        ("BLOCK_KEY4",      ["BLOCK8"],  8,  __base_rd_regs + 0x128, __base_wr_regs, 27,   4,    8, "KEY_PURPOSE_4"),
+        ("BLOCK_SYS_DATA2", ["BLOCK9"],  9,  __base_rd_regs + 0x148, __base_wr_regs, 28,   5,    8, None),
     ]
     # fmt: on
 
@@ -111,17 +111,19 @@ class EfuseDefineBlocks(EfuseBlocksBase):
 
 
 class EfuseDefineFields(EfuseFieldsBase):
-    def __init__(self, extend_efuse_table, revision=None) -> None:
+    def __init__(self, extend_efuse_table) -> None:
         # List of efuse fields from TRM the chapter eFuse Controller.
         self.EFUSES = []
+
         self.KEYBLOCKS = []
+
+        # if BLK_VERSION_MINOR is 1, these efuse fields are in BLOCK2
         self.BLOCK2_CALIBRATION_EFUSES = []
+
         self.CALC: list = []
 
         dir_name = os.path.dirname(os.path.abspath(__file__))
         dir_name, file_name = os.path.split(dir_name)
-        if revision is not None:
-            file_name = revision
         file_name = file_name + ".yaml"
         dir_name, _ = os.path.split(dir_name)
         efuse_file = os.path.join(dir_name, "efuse_defs", file_name)
@@ -137,7 +139,6 @@ class EfuseDefineFields(EfuseFieldsBase):
                 "BLOCK_KEY2",
                 "BLOCK_KEY3",
                 "BLOCK_KEY4",
-                "BLOCK_KEY5",
                 "BLOCK_SYS_DATA2",
             ]:
                 if efuse.name == "BLOCK_USR_DATA":
@@ -149,31 +150,6 @@ class EfuseDefineFields(EfuseFieldsBase):
             elif efuse.category == "calibration":
                 self.BLOCK2_CALIBRATION_EFUSES.append(efuse)
                 self.ALL_EFUSES[i] = None
-
-        f = Field()
-        f.name = "WAFER_VERSION_MAJOR"
-        f.block = 0
-        f.bit_len = 3
-        f.type = f"uint:{f.bit_len}"
-        f.category = "identity"
-        f.class_type = "wafer"
-        f.description = "calc WAFER VERSION MAJOR from (WAFER_VERSION_MAJOR_HI << 2) + WAFER_VERSION_MAJOR_LO (read only)"
-        self.CALC.append(f)
-
-        if any(
-            efuse is not None
-            and getattr(efuse, "name", None) == "RECOVERY_BOOTLOADER_FLASH_SECTOR_0_1"
-            for efuse in self.ALL_EFUSES
-        ):
-            f = Field()
-            f.name = "RECOVERY_BOOTLOADER_FLASH_SECTOR"
-            f.block = 0
-            f.bit_len = 12
-            f.type = f"uint:{f.bit_len}"
-            f.category = "config"
-            f.class_type = "recovery_bootloader"
-            f.description = "recovery_bootloader = RECOVERY_BOOTLOADER_FLASH_SECTOR_0_1 + 2_2 + 3_6 + 7_7 + 8_10 + 11_11"
-            self.CALC.append(f)
 
         for efuse in self.ALL_EFUSES:
             if efuse is not None:

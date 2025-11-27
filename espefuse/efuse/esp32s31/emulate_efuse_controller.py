@@ -1,6 +1,6 @@
-# This file describes eFuses controller for ESP32-P4 chip
+# This file describes eFuses controller for ESP32-S31 chip
 #
-# SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -13,7 +13,7 @@ from ..emulate_efuse_controller_base import EmulateEfuseControllerBase, FatalErr
 class EmulateEfuseController(EmulateEfuseControllerBase):
     """The class for virtual efuse operation. Using for HOST_TEST."""
 
-    CHIP_NAME = "ESP32-P4"
+    CHIP_NAME = "ESP32-S31"
     mem = None
     debug = False
 
@@ -27,13 +27,13 @@ class EmulateEfuseController(EmulateEfuseControllerBase):
     """ esptool method start >>"""
 
     def get_major_chip_version(self):
-        return 3
+        return 0
 
     def get_minor_chip_version(self):
         return 0
 
     def get_crystal_freq(self):
-        return 40  # MHz (common for all chips)
+        return 40  # MHz
 
     def get_security_info(self):
         return {

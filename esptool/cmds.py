@@ -721,7 +721,7 @@ def write_flash(
                 )
 
     if erase_all:
-        erase_flash(esp)
+        erase_flash(esp, force)
     else:
         for address, (data, _) in norm_addr_data:
             write_end = address + len(data)
@@ -1634,6 +1634,7 @@ def run_stub(esp: ESPLoader) -> ESPLoader:
     elif esp.CHIP_NAME in [
         "ESP32-H21",
         "ESP32-H4",
+        "ESP32-S31",
     ]:  # TODO: [ESP32H21] IDF-11509   [ESP32H4] IDF-12271
         log.warning(
             f"Stub flasher is not yet supported on {esp.CHIP_NAME}, "
