@@ -7,20 +7,19 @@ import sys
 import rich_click as click
 
 import esptool
-from esptool.cli_util import BaudRateType, ChipType, ResetModeType, SerialPortType
-from esptool.logger import log
-
 from espefuse.cli_util import Group
 from espefuse.efuse.base_operations import BaseCommands
 from espefuse.efuse_interface import (
     DEPRECATED_COMMANDS,
+    SUPPORTED_BURN_COMMANDS,
+    SUPPORTED_CHIPS,
+    SUPPORTED_COMMANDS,
+    SUPPORTED_READ_COMMANDS,
     get_esp,
     init_commands,
-    SUPPORTED_COMMANDS,
-    SUPPORTED_BURN_COMMANDS,
-    SUPPORTED_READ_COMMANDS,
-    SUPPORTED_CHIPS,
 )
+from esptool.cli_util import BaudRateType, ChipType, ResetModeType, SerialPortType
+from esptool.logger import log
 from esptool.util import check_deprecated_py_suffix
 
 __all__ = [
@@ -74,6 +73,13 @@ __all__ = [
     help="Which reset to perform before connecting to the chip.",
 )
 @click.option(
+    "--after",
+    "-a",
+    type=ResetModeType(["hard-reset", "soft-reset", "no-reset", "watchdog-reset"]),
+    default="no-reset",
+    help="Which reset to perform after operation is finished.",
+)
+@click.option(
     "--debug", "-d", is_flag=True, help="Show debugging information (loglevel=DEBUG)."
 )
 @click.option(
@@ -110,6 +116,7 @@ def cli(
     baud,
     port,
     before,
+    after,
     debug,
     virt,
     path_efuse_file,
@@ -144,8 +151,12 @@ def cli(
             )
 
     def close_port():
-        if not external_esp and not virt and esp._port:
+        if virt:
+            return
+        if not external_esp and esp._port:
             esp._port.close()
+        if after != "no-reset":
+            esptool.reset_chip(esp, after)
 
     ctx.call_on_close(close_port)
 

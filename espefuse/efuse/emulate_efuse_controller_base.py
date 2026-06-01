@@ -4,11 +4,12 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-from abc import abstractmethod
 import re
+from abc import ABC, abstractmethod
 from typing import Any
 
 from bitstring import BitStream
+
 from espefuse.efuse.mem_definition_base import (
     BlockDefinition,
     EfuseBlocksBase,
@@ -19,7 +20,7 @@ from espefuse.efuse.mem_definition_base import (
 from esptool.logger import log
 
 
-class EmulateEfuseControllerBase:
+class EmulateEfuseControllerBase(ABC):
     """The class for virtual efuse operations. Using for HOST_TEST."""
 
     CHIP_NAME: str = ""
@@ -100,9 +101,6 @@ class EmulateEfuseControllerBase:
         """Write the nth word of the ESP3x EFUSE region."""
         blk = self.Blocks.get(self.Blocks.BLOCKS[block])
         self.write_reg(blk.wr_addr + (4 * n), value)
-
-    def _get_pid(self) -> int:
-        return -1
 
     """ << esptool method end """
 

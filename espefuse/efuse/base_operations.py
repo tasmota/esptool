@@ -4,24 +4,22 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-from abc import abstractmethod
 import io
-import os
 import json
+import os
 import sys
-from typing import Any, BinaryIO, TextIO
+from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Any, BinaryIO, TextIO, cast
 
-import espsecure
 import rich_click as click
-
 from bitstring import BitStream
 
+import espsecure
 import esptool
 from esptool.logger import log
 
-from . import base_fields
-from . import util
+from . import base_fields, util
 from .emulate_efuse_controller_base import EmulateEfuseControllerBase
 
 
@@ -195,7 +193,7 @@ def protect_options(function: Callable):
     return function
 
 
-class BaseCommands:
+class BaseCommands(ABC):
     CHIP_NAME = "auto"
     efuse_lib: type[base_fields.EspEfusesBase] | None = None
     efuses: base_fields.EspEfusesBase
@@ -264,8 +262,7 @@ class BaseCommands:
             required=True,
             nargs=-1,
             type=EfuseValuePairType(
-                [e.name for e in efuses]
-                + [name for e in efuses for name in e.alt_names if name != ""],
+                [name for e in efuses for name in e.all_names],
                 self.efuses,
             ),
         )
@@ -281,7 +278,19 @@ class BaseCommands:
             help="Disable readback for the selected eFuse with the specified name.",
             short_help="Disable readback for the eFuse.",
         )
-        @click.argument("efuse_name", nargs=-1, required=True)
+        @click.argument(
+            "efuse_name",
+            nargs=-1,
+            required=True,
+            type=click.Choice(
+                [
+                    name
+                    for e in efuses
+                    if e.read_disable_bit is not None
+                    for name in e.all_names
+                ]
+            ),
+        )
         @click.pass_context
         def read_protect_efuse_cli(ctx, efuse_name):
             self.read_protect_efuse(efuse_name)
@@ -291,7 +300,19 @@ class BaseCommands:
             help="Disable writing to the eFuse with the specified name.",
             short_help="Disable writing to the eFuse.",
         )
-        @click.argument("efuse_name", nargs=-1, required=True)
+        @click.argument(
+            "efuse_name",
+            nargs=-1,
+            required=True,
+            type=click.Choice(
+                [
+                    name
+                    for e in efuses
+                    if e.write_disable_bit is not None
+                    for name in e.all_names
+                ]
+            ),
+        )
         def write_protect_efuse_cli(efuse_name):
             """Disable writing to the eFuse with the specified name."""
             self.write_protect_efuse(efuse_name)
@@ -331,7 +352,11 @@ class BaseCommands:
             self.burn_block_data(block, datafile, offset)
 
         @cli.command("burn-bit")
-        @click.argument("block", required=True)
+        @click.argument(
+            "block",
+            required=True,
+            type=click.Choice(self.efuses.BURN_BLOCK_DATA_NAMES),
+        )
         @click.argument(
             "bit_number",
             nargs=-1,
@@ -458,7 +483,7 @@ class BaseCommands:
     def _key_block_is_unused(
         self,
         block: base_fields.EfuseBlockBase,
-        key_purpose_block: base_fields.EfuseBlockBase,
+        key_purpose_block: base_fields.EfuseFieldBase,
     ) -> bool:
         """Helper method to check if a key block is available for use"""
         if not block.is_readable() or not block.is_writeable():
@@ -487,7 +512,7 @@ class BaseCommands:
         key_blocks = [b for b in key_blocks if b.name not in block_name_list]
 
         for block in key_blocks:
-            key_purpose_block = self.efuses[block.key_purpose_name]
+            key_purpose_block = self.efuses[cast(str, block.key_purpose_name)]
             if self._key_block_is_unused(block, key_purpose_block):
                 return block
 
@@ -733,6 +758,9 @@ class BaseCommands:
                     json_efuse[e.name] = {
                         "name": e.name,
                         "value": base_value if readable else value,
+                        "raw_value": util.json_raw_value_hex(
+                            e.efuse_type, e.get_bitstring()
+                        ),
                         "readable": readable,
                         "writeable": writeable,
                         "description": e.description,
@@ -990,10 +1018,9 @@ class BaseCommands:
                         not self.efuses["XTS_KEY_LENGTH_256"].get()
                         and efuse_name == "BLOCK_KEY0"
                     )
-                    error |= self.efuses["SECURE_BOOT_EN"].get() and efuse_name in [
-                        "BLOCK_KEY0",
-                        "BLOCK_KEY0_HI_128",
-                    ]
+                    error |= cast(
+                        bool, self.efuses["SECURE_BOOT_EN"].get()
+                    ) and efuse_name in ["BLOCK_KEY0", "BLOCK_KEY0_HI_128"]
                     if error:
                         raise esptool.FatalError(
                             f"{efuse_name} must be readable, stop this operation!"
@@ -1003,7 +1030,7 @@ class BaseCommands:
                         block = self.efuses.Blocks.get(block_tuple)
                         if block.name == efuse_name and block.key_purpose is not None:
                             if not self.efuses[block.key_purpose].need_rd_protect(
-                                self.efuses[block.key_purpose].get()
+                                cast(str, self.efuses[block.key_purpose].get())
                             ):
                                 raise esptool.FatalError(
                                     f"{efuse_name} must be readable, "

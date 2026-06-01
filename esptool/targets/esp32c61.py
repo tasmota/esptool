@@ -5,9 +5,9 @@
 
 import struct
 
+from ..loader import StubMixin
 from .esp32c3 import ESP32C3ROM
 from .esp32c6 import ESP32C6ROM
-from ..loader import StubMixin
 
 
 class ESP32C61ROM(ESP32C6ROM):
@@ -36,26 +36,13 @@ class ESP32C61ROM(ESP32C6ROM):
     EFUSE_PURPOSE_KEY5_SHIFT = 20
 
     EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT_REG = EFUSE_RD_REG_BASE
-    EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT = 1 << 20
+    EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT = 1 << 14
 
     EFUSE_SPI_BOOT_CRYPT_CNT_REG = EFUSE_BASE + 0x030
     EFUSE_SPI_BOOT_CRYPT_CNT_MASK = 0x7 << 23
 
     EFUSE_SECURE_BOOT_EN_REG = EFUSE_BASE + 0x034
     EFUSE_SECURE_BOOT_EN_MASK = 1 << 26
-
-    # Variable in ROM .bss which indicates the port in use
-    @property
-    def UARTDEV_BUF_NO(self):
-        """Variable .bss.UartDev.buff_uart_no in ROM .bss
-        which indicates the port in use.
-        """
-        return 0x4084F5EC if self.get_chip_revision() <= 2 else 0x4084F5E4
-
-    @property
-    def UARTDEV_BUF_NO_USB_JTAG_SERIAL(self):
-        """The above var when USB-JTAG/Serial is used."""
-        return 3 if self.get_chip_revision() <= 2 else 4
 
     FLASH_FREQUENCY = {
         "80m": 0xF,

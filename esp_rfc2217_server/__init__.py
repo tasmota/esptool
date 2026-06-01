@@ -15,6 +15,7 @@
 import logging
 import socket
 import sys
+
 import serial
 
 from esp_rfc2217_server.redirector import Redirector
@@ -93,7 +94,12 @@ def main():
     srv.listen(1)
     logging.info(f"TCP/IP port: {args.localport}")
 
-    host_ip = socket.gethostbyname(socket.gethostname())
+    try:
+        host_ip = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        # CI/minimal containers often have no DNS for gethostname(); the server
+        # is still reachable on loopback.
+        host_ip = "127.0.0.1"
     wait_msg = (
         "Waiting for connection ... use the 'rfc2217://"
         f"{host_ip}:{args.localport}?ign_set_control' as a PORT"

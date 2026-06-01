@@ -6,10 +6,10 @@
 import struct
 import time
 
-from .esp32c3 import ESP32C3ROM
 from ..loader import ESPLoader, StubMixin
 from ..logger import log
 from ..util import FatalError
+from .esp32c3 import ESP32C3ROM
 
 
 class ESP32C2ROM(ESP32C3ROM):
@@ -29,7 +29,7 @@ class ESP32C2ROM(ESP32C3ROM):
     EFUSE_SECURE_BOOT_EN_MASK = 1 << 21
 
     EFUSE_SPI_BOOT_CRYPT_CNT_REG = EFUSE_BASE + 0x30
-    EFUSE_SPI_BOOT_CRYPT_CNT_MASK = 0x7 << 18
+    EFUSE_SPI_BOOT_CRYPT_CNT_MASK = 0x7 << 7
 
     EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT_REG = EFUSE_BASE + 0x30
     EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT = 1 << 6

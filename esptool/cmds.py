@@ -5,51 +5,60 @@
 
 import hashlib
 import io
+import itertools
 import os
 import struct
 import sys
 import time
 import zlib
-import itertools
+from typing import cast
 
 from intelhex import IntelHex
 from serial import SerialException
-from typing import cast
 
-from .bin_image import ELFFile, LoadFirmwareImage
 from .bin_image import (
+    ELFFile,
     ESP8266ROMFirmwareImage,
     ESP8266V2FirmwareImage,
     ESP8266V3FirmwareImage,
+    LoadFirmwareImage,
 )
 from .loader import (
     DEFAULT_CONNECT_ATTEMPTS,
     DEFAULT_TIMEOUT,
     ERASE_WRITE_TIMEOUT_PER_MB,
+    NAND_BLOCK_SIZE,
+    NAND_PAGES_PER_BLOCK,
     ESPLoader,
+    StubFlasher,
     timeout_per_mb,
 )
 from .logger import log
-
 from .targets import CHIP_DEFS, CHIP_LIST, ROM_LIST
 from .uf2_writer import UF2Writer
 from .util import (
     FatalError,
+    ImageSource,
+    NANDEraseFailed,
+    NANDProgramFailed,
     NotImplementedInROMError,
     NotSupportedError,
+    PrintOnce,
     UnsupportedCommandError,
-)
-from .util import (
     div_roundup,
     expand_chip_name,
     flash_size_bytes,
-    hexify,
-    ImageSource,
     get_bytes,
     get_key_from_value,
+    hexify,
     pad_to,
     sanitize_string,
 )
+
+_NAND_EXPERIMENTAL_MSG = (
+    "NAND flash support is experimental and may change without notice."
+)
+_warn_nand_experimental = PrintOnce(log.warning)
 
 
 # Vendors with different detection logic
@@ -570,12 +579,301 @@ def _diff_flash_regions(
     return regions
 
 
+def _read_flash_nand_with_skip(
+    esp: ESPLoader,
+    address: int,
+    size: int,
+    progress_fn=None,
+    nand_end_address: int | None = None,
+) -> bytes:
+    """
+    Read ``size`` bytes of logical data from NAND flash starting at logical
+    ``address``, skipping bad blocks.  Bad blocks are detected via the first
+    spare byte of each block's first page (0xFF = good).  Only data from good
+    blocks is included in the returned buffer; the caller receives contiguous
+    logical data exactly ``size`` bytes long.
+
+    Raises FatalError if the end of the addressable range is reached before
+    ``size`` bytes of good-block data have been accumulated.
+    """
+    if nand_end_address is None:
+        nand_end_address = NAND_TOTAL_SIZE
+    accumulated = b""
+    phys_addr = address
+
+    while len(accumulated) < size:
+        if phys_addr >= nand_end_address:
+            raise FatalError(
+                f"Reached NAND end address {nand_end_address:#x} before reading the "
+                f"requested {size} bytes; remaining good blocks exhausted."
+            )
+
+        # Check bad-block marker for this physical block
+        page_num = phys_addr // NAND_BLOCK_SIZE * NAND_PAGES_PER_BLOCK
+        bb = esp.read_nand_spare(page_num) & 0xFF
+        if bb != 0xFF:
+            log.print(f"Skipping bad block at {phys_addr:#010x} during read")
+            phys_addr += NAND_BLOCK_SIZE
+            if phys_addr >= nand_end_address:
+                raise FatalError(
+                    f"Reached NAND end address {nand_end_address:#x} before reading "
+                    f"the requested {size} bytes; remaining good blocks exhausted."
+                )
+            continue
+
+        remaining = size - len(accumulated)
+        read_size = min(NAND_BLOCK_SIZE - (phys_addr % NAND_BLOCK_SIZE), remaining)
+        chunk = esp.read_flash_nand(phys_addr, read_size, None)
+        accumulated += chunk
+
+        if progress_fn is not None:
+            progress_fn(len(accumulated), size, address)
+
+        phys_addr += read_size
+
+    return accumulated[:size]
+
+
+def _count_good_blocks(esp, start_addr, end_addr, needed):
+    """Return min(good_blocks, needed) between [start_addr, end_addr).
+
+    Stops early once `needed` good blocks are found (matches existing pre-scan
+    behaviour).
+    """
+    good = 0
+    addr = start_addr
+    while addr < end_addr:
+        page_num = addr // NAND_BLOCK_SIZE * NAND_PAGES_PER_BLOCK
+        if esp.read_nand_spare(page_num) & 0xFF == 0xFF:
+            good += 1
+            if good >= needed:
+                break
+        addr += NAND_BLOCK_SIZE
+    return good
+
+
+def _write_flash_nand(
+    esp: ESPLoader, addr_data: list[tuple[int, ImageSource]], **kwargs
+) -> None:
+    """
+    Write firmware or data to NAND flash memory (internal helper).
+    NAND flash writing has different logic due to bad block management.
+    Uses stub commands ESP_SPI_NAND_WRITE_FLASH_BEGIN / ESP_SPI_NAND_WRITE_FLASH_DATA.
+    """
+    _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+    BLOCK_SIZE = NAND_BLOCK_SIZE
+
+    no_progress: bool = kwargs.get("no_progress", False)
+    nand_end_address = kwargs.get("nand_end_address")
+    if nand_end_address is None:
+        nand_end_address = NAND_TOTAL_SIZE
+
+    def split_bytes(data: bytes, chunk_size=BLOCK_SIZE):
+        """Split data into chunks of specified size"""
+        return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
+
+    # Normalize addr_data to use bytes
+    norm_addr_data = [(addr, get_bytes(data)) for addr, data in addr_data]
+
+    # Record current write block index, may skip bad blocks
+    image_write_block_address = 0
+
+    for address, (image, name) in norm_addr_data:
+        if address % BLOCK_SIZE != 0:
+            raise FatalError(
+                "For NAND flash, each bin should be flashed "
+                f"based on block size: {BLOCK_SIZE // 1024}KB ({BLOCK_SIZE:#x})"
+            )
+
+        if image_write_block_address > address:
+            raise FatalError(
+                "Failed to write image due to image overlap. "
+                "This is usually caused by skip_bad_block"
+            )
+
+        image_write_block_address = address
+
+        # Image should be padded to block size
+        image = pad_to(image, BLOCK_SIZE)
+
+        if len(image) == 0:
+            msg = "Input image is empty." if name is None else f"'{name}' is empty."
+            log.warning(msg)
+            continue
+
+        image_chunks = split_bytes(image)
+        blocks_needed = len(image_chunks)
+
+        good_blocks = _count_good_blocks(esp, address, nand_end_address, blocks_needed)
+        if good_blocks < blocks_needed:
+            raise FatalError(
+                f"Not enough good blocks between {address:#x} and "
+                f"{nand_end_address:#x}: need {blocks_needed}, found {good_blocks}."
+            )
+
+        block_logic_idx = 0
+        while block_logic_idx < len(image_chunks):
+            # Key logic: find a good block to burn
+            found_good = False
+            for _ in range(MAX_NAND_RETRIES):
+                if image_write_block_address >= nand_end_address:
+                    raise FatalError(
+                        f"Exceeded end address {nand_end_address:#x} "
+                        "while skipping bad blocks."
+                    )
+                # Check bad block marker in spare area of the first page of the
+                # current physical block (image_write_block_address tracks skips
+                # from previous chunks, so use it instead of a per-chunk offset).
+                page_num = (
+                    image_write_block_address // BLOCK_SIZE * NAND_PAGES_PER_BLOCK
+                )
+                bb = esp.read_nand_spare(page_num) & 0xFF
+
+                if bb == 0xFF:
+                    # Good block found
+                    found_good = True
+                    break
+                else:
+                    # Bad block, try next one
+                    log.print(
+                        f"Found bad block at {image_write_block_address:#010x}, "
+                        "trying next block!"
+                    )
+                    image_write_block_address += BLOCK_SIZE
+
+            if not found_good:
+                # No good block found after retries
+                raise FatalError("Cannot find a good block to write bin")
+
+            # We have a good block, write it via NAND stub commands
+            image_block = image_chunks[block_logic_idx]
+            uncsize = len(image_block)
+
+            # Transport failures from write_flash_nand_begin / write_flash_nand_block
+            # propagate directly — no bad-block mark.  A NANDProgramFailed raised
+            # by the stub is caught below and triggers an immediate bad-block mark
+            # (the chip itself reported P_FAIL — no need to re-verify).
+            esp.write_flash_nand_begin(uncsize, image_write_block_address)
+
+            t = time.time()
+            timeout = DEFAULT_TIMEOUT
+            bytes_written = 0
+            seq = 0
+            image_block_orig = image_block  # keep for post-write verify
+
+            try:
+                while len(image_block) > 0:
+                    if not no_progress:
+                        log.progress_bar(
+                            cur_iter=uncsize - len(image_block),
+                            total_iters=uncsize,
+                            prefix="Writing at "
+                            f"{image_write_block_address + bytes_written:#010x} ",
+                            suffix=f" {bytes_written}/{uncsize} bytes...",
+                        )
+
+                    block = image_block[0 : esp.FLASH_WRITE_SIZE]
+                    block = block + b"\xff" * (esp.FLASH_WRITE_SIZE - len(block))
+                    esp.write_flash_nand_block(block, seq)
+                    bytes_written += len(block)
+                    image_block = image_block[esp.FLASH_WRITE_SIZE :]
+                    seq += 1
+
+                esp.write_flash_nand_finish(reboot=False)
+            except NANDProgramFailed:
+                fail_addr = image_write_block_address
+                page_num = fail_addr // BLOCK_SIZE * NAND_PAGES_PER_BLOCK
+                log.warning(
+                    f"P_FAIL reported by NAND chip at {fail_addr:#010x}, "
+                    "marking as bad block"
+                )
+                try:
+                    esp.write_nand_spare(page_num, 1)
+                except FatalError:
+                    log.warning("Failed to mark block as bad, continuing anyway")
+                image_write_block_address += BLOCK_SIZE
+                # block_logic_idx not incremented — retry same logical chunk
+                remaining = len(image_chunks) - block_logic_idx
+                found = _count_good_blocks(
+                    esp, image_write_block_address, nand_end_address, remaining
+                )
+                if found < remaining:
+                    raise FatalError(
+                        f"Good-block budget exhausted after bad-block skip: "
+                        f"{remaining} more chunks to write but only {found} good "
+                        f"blocks remain between {image_write_block_address:#x} and "
+                        f"{nand_end_address:#x}."
+                    )
+                continue
+
+            if esp.IS_STUB:
+                esp.read_reg(esp.CHIP_DETECT_MAGIC_REG_ADDR, timeout=timeout)
+
+            t = time.time() - t
+            speed_msg = (
+                f" ({bytes_written / t * 8 / 1000:.1f} kbit/s)" if t > 0.0 else ""
+            )
+            log.print(
+                f"Wrote {bytes_written} bytes at {image_write_block_address:#010x} "
+                f"in {t:.1f} seconds{speed_msg}."
+            )
+
+            # Verify first page of the block to detect a silent program failure
+            # the chip didn't flag (rare, but possible).  Per NAND spec (W25N01GV
+            # chapter 10): mark block bad after a program-failure, then retry the
+            # same logical chunk on the next physical block.  Transport errors
+            # (FatalError from the read itself) propagate directly.
+            first_page = image_block_orig[: esp.FLASH_WRITE_SIZE] + b"\xff" * max(
+                0, esp.FLASH_WRITE_SIZE - len(image_block_orig)
+            )
+            readback = esp.read_flash_nand(
+                image_write_block_address, esp.FLASH_WRITE_SIZE, None
+            )
+            if readback != first_page:
+                # Re-read once before condemning the block.  A single SLIP/UART
+                # corruption on the verify read would otherwise mark a healthy
+                # block bad.  Only condemn if the second read also mismatches.
+                readback = esp.read_flash_nand(
+                    image_write_block_address, esp.FLASH_WRITE_SIZE, None
+                )
+            if readback != first_page:
+                fail_addr = image_write_block_address
+                page_num = fail_addr // BLOCK_SIZE * NAND_PAGES_PER_BLOCK
+                log.warning(
+                    f"Write verify failed at {fail_addr:#010x} after re-read, "
+                    "marking as bad block"
+                )
+                try:
+                    esp.write_nand_spare(page_num, 1)
+                except FatalError:
+                    log.warning("Failed to mark block as bad, continuing anyway")
+                image_write_block_address += BLOCK_SIZE
+                # block_logic_idx not incremented — retry same logical chunk
+                remaining = len(image_chunks) - block_logic_idx
+                found = _count_good_blocks(
+                    esp, image_write_block_address, nand_end_address, remaining
+                )
+                if found < remaining:
+                    raise FatalError(
+                        f"Good-block budget exhausted after bad-block skip: "
+                        f"{remaining} more chunks to write but only {found} good "
+                        f"blocks remain between {image_write_block_address:#x} and "
+                        f"{nand_end_address:#x}."
+                    )
+            else:
+                block_logic_idx += 1
+                image_write_block_address += BLOCK_SIZE
+
+    log.print("Leaving...")
+
+
 def write_flash(
     esp: ESPLoader,
     addr_data: list[tuple[int, ImageSource]],
     flash_freq: str = "keep",
     flash_mode: str = "keep",
     flash_size: str = "keep",
+    flash_type: str = "nor",
     **kwargs,
 ) -> None:
     """
@@ -592,6 +890,7 @@ def write_flash(
             (``"keep"`` to retain current).
         flash_size: Flash size to set in the bootloader image header
             (``"keep"`` to retain current).
+        flash_type: Flash type - "nor" (default) or "nand".
 
     Keyword Args:
         erase_all (bool): Erase the entire flash before writing.
@@ -606,13 +905,21 @@ def write_flash(
         no_progress (bool): Disable progress updates.
         diff_with: list[ImageSource | None]: Previously flashed image(s)
             to compare with for fast reflashing. Will be zipped with addr_data.
-        no_diff_verify: bool: Skip MD5 checks for faster reflashing. Requires
-            diff_with to be specified. Must be sure the flash content has not changed
-            since the last flash. Mutually exclusive with skip_flashed.
+        no_diff_verify: bool: Skip post-flash verification of unchanged files when
+            using diff_with to save time (trust the state of the flash contents).
+            Only unchanged files are skipped without an MD5 check,
+            written data is still verified after write and the whole file
+            is reflashed if verification fails. Use only when flash has not been
+            modified since the last flash.
+            Requires diff_with. Mutually exclusive with skip_flashed.
         skip_flashed: bool: Skip flashing if the new binary is already in flash.
-            Automatically enabled for each file with a diff_with pair.
-            Mutually exclusive with no_diff_verify.
+            Only for use when diff_with is not specified (mutually exclusive).
     """
+    # Check if NAND flash mode is requested
+    if flash_type == "nand":
+        return _write_flash_nand(esp, addr_data, **kwargs)
+
+    # Original NOR flash logic continues below
     # Normalize addr_data to use bytes
     norm_addr_data = [(addr, get_bytes(data)) for addr, data in addr_data]
 
@@ -637,10 +944,8 @@ def write_flash(
     if not compress and not no_compress:
         compress = esp.IS_STUB
 
-    if skip_flashed and no_diff_verify:
-        raise FatalError(
-            "Options no_diff_verify and skip_flashed are mutually exclusive."
-        )
+    if skip_flashed and diff_with:
+        raise FatalError("Options diff_with and skip_flashed are mutually exclusive.")
 
     # Check for conditions that disable fast reflashing and skip-flashed checks
     reason = None
@@ -660,6 +965,7 @@ def write_flash(
                 f"with {reason}. Will flash all data."
             )
             diff_with = []
+            no_diff_verify = False
         if skip_flashed:
             log.note(
                 "Skipping flashing of already flashed content is not supported "
@@ -668,7 +974,7 @@ def write_flash(
             skip_flashed = False
 
     if no_diff_verify and not diff_with:
-        log.note("No diff verification mode requires diff data to be specified.")
+        log.note("Option no_diff_verify requires diff_with to be specified.")
         no_diff_verify = False
 
     if not force and esp.CHIP_NAME != "ESP8266" and not esp.secure_download_mode:
@@ -681,6 +987,21 @@ def write_flash(
                     raise FatalError(
                         "Secure Boot V1 detected, writing to flash regions < 0x8000 "
                         "is disabled to protect the bootloader. "
+                        "Use the force argument to override, "
+                        "please use with caution, otherwise it may brick your device!"
+                    )
+        # Check if flash encryption with key manager is active
+        # The 0x0-0x2000 region stores key recovery info and must not be erased
+        if (
+            esp.get_flash_encryption_enabled()
+            and esp.uses_key_manager_for_flash_encryption()
+        ):
+            for address, (data, _) in norm_addr_data:
+                if address < 0x2000:
+                    raise FatalError(
+                        "Flash encryption with Key Manager detected, "
+                        "writing to flash region 0x0-0x2000 is disabled "
+                        "to protect key recovery info. "
                         "Use the force argument to override, "
                         "please use with caution, otherwise it may brick your device!"
                     )
@@ -827,7 +1148,8 @@ def write_flash(
                 raise FatalError(
                     "Detected flash encryption enabled and "
                     "download manual encrypt disabled.\n"
-                    "Flashing plaintext binary may brick your device! "
+                    "Data must be encrypted appropriately before flashing.\n"
+                    "Flashing plaintext data may brick your device! "
                     "Use the force argument to override the warning."
                 )
 
@@ -924,6 +1246,9 @@ def write_flash(
 
     # Process and flash all files/input streams one by one
     for address, image, name, encrypted, diff_data in all_files:
+        if len(all_files) > 1:
+            source = f"'{name}'" if name is not None else "input"
+            log.print(f"\nWriting {source} at {address:#010x}...")
         if len(image) == 0:
             log.warning(
                 "Input bytes are empty." if name is None else f"'{name}' is empty."
@@ -975,54 +1300,14 @@ def write_flash(
         base_size = image_size
 
         image_md5 = hashlib.md5(image).hexdigest()
-        do_pre_md5_checks = (
-            (skip_flashed or diff_data)
-            and not no_diff_verify
-            and not erase_all
-            and not encrypted
-            and not (esp.CHIP_NAME == "ESP8266" and not esp.IS_STUB)
-            and not esp.secure_download_mode
-        )
 
-        # Prepare for pre-MD5 checks while minimizing number of flash_md5sum calls,
-        # which are time-consuming.
-        new_shorter = True
-        if do_pre_md5_checks and diff_data:
-            old_image_size = len(diff_data)
-            new_shorter = image_size <= old_image_size
-            if new_shorter:
-                # If new data is shorter or the same length as the old data,
-                # check the overlap only, we don't care about the rest of old data
-                old_image_md5_overlap = hashlib.md5(diff_data[:image_size]).hexdigest()
-            else:
-                # If new data is longer than the old data,
-                # check first the overlap and then also the rest of new data
-                old_image_md5 = hashlib.md5(diff_data).hexdigest()
-
-        # Decide if we skip flash, do a fast reflash or a full flash
-        if do_pre_md5_checks:
-            data_already_in_flash = False
+        # Skip flash write if the new image is already in flash
+        if skip_flashed:
             log.stage()
             log.print("Comparing flash contents against new data...")
-            if not diff_data or new_shorter:
-                flash_md5 = esp.flash_md5sum(address, image_size)
-                log.stage(finish=True)
-                if flash_md5 == image_md5:
-                    data_already_in_flash = True
-            else:  # New data is longer than the old data, check per-partes
-                flash_md5_overlap = esp.flash_md5sum(address, old_image_size)
-                new_image_md5_overlap = hashlib.md5(image[:old_image_size]).hexdigest()
-                if flash_md5_overlap == new_image_md5_overlap:
-                    # Overlap matches, now check the rest of the new data
-                    flash_md5_rest = esp.flash_md5sum(
-                        address + old_image_size, image_size - old_image_size
-                    )
-                    new_image_md5_rest = hashlib.md5(image[old_image_size:]).hexdigest()
-                    if flash_md5_rest == new_image_md5_rest:
-                        data_already_in_flash = True
-                log.stage(finish=True)
-
-            if data_already_in_flash:
+            flash_md5 = esp.flash_md5sum(address, image_size)
+            log.stage(finish=True)
+            if flash_md5 == image_md5:
                 source = "Input bytes" if name is None else f"'{name}'"
                 log.print(
                     f"{source} at {orig_address:#010x} already in flash, "
@@ -1032,245 +1317,268 @@ def write_flash(
 
         # Default: one flash cycle of the full image, flag = False means not reflashing
         cycles = [[image, address, name, False]]
-        # Check if fast reflashing is possible (requires diff_data)
-        if diff_data and (no_diff_verify or do_pre_md5_checks):
-            reflash = False
-            if no_diff_verify or (
-                flash_md5 == old_image_md5_overlap
-                if new_shorter
-                else flash_md5_overlap == old_image_md5
-            ):
-                reflash = True
-            else:
-                log.note(
-                    "Diff data in flash has changed, flashing all of the new data..."
-                )
-
-            if reflash:
-                regions = _diff_flash_regions(diff_data, image, address)
-
-                if not regions:
-                    log.print("No changed sectors found, skipping write.")
-                    continue
-
-                if no_diff_verify:
-                    log.print(
-                        "No diff verification enabled, "
-                        "will reflash changed sectors without pre-verification..."
-                    )
-                else:
-                    log.print(
-                        "Diff data in flash matches, "
-                        "will reflash changed sectors only..."
-                    )
-
-                cycles = []  # Reflash: flash one/more cycles of changed sectors only
+        # With diff data: assume previous binary in flash, reflash only changed sectors
+        # (no pre-flash MD5). Post-flash MD5 verifies - if it fails, we full reflash.
+        if diff_data:
+            regions = _diff_flash_regions(diff_data, image, address)
+            if regions:
+                log.print("Changed data sectors found, fast reflashing...")
+                cycles = []
                 for addr, data in regions:
                     cycles.append([data, addr, name, True])
-
-        # Flash the full image or do flash cycles of changed sectors only
-        for cur_cycle, (image, address, name, reflashing) in enumerate(cycles):
-            uncsize = image_size = len(image)
-            if reflashing:
-                no_of_sectors = image_size // esp.FLASH_SECTOR_SIZE
-                log.print(
-                    f"Reflashing {no_of_sectors} changed "
-                    f"sector{'s' if no_of_sectors > 1 else ''} at {address:#010x}..."
-                )
-                orig_address = address
-
-            if not erase_all:
-                write_end = address + image_size
-                bytes_over = orig_address % esp.FLASH_SECTOR_SIZE
-                if bytes_over != 0:
-                    log.note(
-                        f"Flash address {orig_address:#010x} is not aligned "
-                        f"to a {esp.FLASH_SECTOR_SIZE:#x} byte flash sector. "
-                        f"{bytes_over:#x} bytes before this address will be erased."
+            else:  # No sectors changed
+                if no_diff_verify:
+                    log.print(
+                        "No changed sectors found and trust flash content mode "
+                        "is enabled, skipping write and verification."
                     )
-                # Print the address range of to-be-erased flash memory region
-                log.print(
-                    "Flash will be erased from {:#010x} to {:#010x}...".format(
-                        orig_address - bytes_over,
-                        div_roundup(write_end, esp.FLASH_SECTOR_SIZE)
-                        * esp.FLASH_SECTOR_SIZE
-                        - 1,
-                    )
-                )
-            if compress:
-                compressed_image = zlib.compress(image, 9)
-                compsize = len(compressed_image)
-                # Only use compression if it actually reduces the data size
-                if compsize < uncsize:
-                    image = compressed_image
-                    image_size = compsize
+                    continue
+                # Verify if the new binary is already in flash
+                log.stage()
+                log.print("No changed sectors found, verifying if data is in flash...")
+                if not encrypted and not esp.secure_download_mode:
+                    try:
+                        flash_md5 = esp.flash_md5sum(address, image_size)
+                        log.stage(finish=True)
+                        if flash_md5 == image_md5:
+                            source = "Input bytes" if name is None else f"'{name}'"
+                            log.print(f"{source} at {orig_address:#010x} verified.")
+                            continue
+                    except NotImplementedInROMError:  # ESP8266 ROM
+                        log.stage(finish=True)
                 else:
-                    # Compression didn't help, disable it for this file
-                    source = (
-                        "changed data"
-                        if reflashing
-                        else "input image"
-                        if name is None
-                        else f"file '{name}'"
-                    )
-                    log.note(
-                        f"Cannot compress {source} more than the original size, "
-                        f"will flash uncompressed. Compressed size {compsize} bytes "
-                        f">= uncompressed {uncsize} bytes."
-                    )
-                    compress = False
+                    log.stage(finish=True)
+                log.note("Data not found in flash, flashing the whole image...")
 
-            original_image = image  # Save the whole image in case retry is needed
-            # Try again if reconnect was successful
-            log.stage()
-            for attempt in range(1, esp.WRITE_FLASH_ATTEMPTS + 1):
-                try:
-                    if not esp.IS_STUB:
-                        log.print("Erasing flash...")
-                    if compress:
-                        # Decompress the compressed binary a block at a time,
-                        # to dynamically calculate the timeout based on the write size
-                        decompress = zlib.decompressobj()
-                        esp.flash_defl_begin(
-                            uncsize, image_size, address, encrypted_write=encrypted
+        full_image = image  # Keep for potential full reflash on MD5 mismatch
+        was_reflashing = any(reflashing for _, _, _, reflashing in cycles)
+
+        # Flash the full image or do flash cycles of changed sectors only.
+        # If flashing changed sectors only and post-flash verification fails,
+        # retry by reflashing the whole file (flash may have differed from expected).
+        while True:
+            # Save so we restore on full-image retry; a small chunk may have set
+            # compress = False but the full image might still compress well.
+            compress_for_retry = compress
+            for cur_cycle, (image, address, name, reflashing) in enumerate(cycles):
+                uncsize = image_size = len(image)
+                if reflashing:
+                    no_of_sectors = image_size // esp.FLASH_SECTOR_SIZE
+                    log.print(
+                        f"Reflashing {no_of_sectors} changed sector"
+                        f"{'s' if no_of_sectors > 1 else ''} at {address:#010x}..."
+                    )
+                    orig_address = address
+
+                if not erase_all:
+                    write_end = address + image_size
+                    bytes_over = orig_address % esp.FLASH_SECTOR_SIZE
+                    if bytes_over != 0:
+                        log.note(
+                            f"Flash address {orig_address:#010x} is not aligned "
+                            f"to a {esp.FLASH_SECTOR_SIZE:#x} byte flash sector. "
+                            f"{bytes_over:#x} bytes before this address will be erased."
                         )
+                    # Print the address range of to-be-erased flash memory region
+                    log.print(
+                        "Flash will be erased from {:#010x} to {:#010x}...".format(
+                            orig_address - bytes_over,
+                            div_roundup(write_end, esp.FLASH_SECTOR_SIZE)
+                            * esp.FLASH_SECTOR_SIZE
+                            - 1,
+                        )
+                    )
+                if compress:
+                    compressed_image = zlib.compress(image, 9)
+                    compsize = len(compressed_image)
+                    # Only use compression if it actually reduces the data size
+                    if compsize < uncsize:
+                        image = compressed_image
+                        image_size = compsize
                     else:
-                        esp.flash_begin(uncsize, address, encrypted_write=encrypted)
-                    seq = 0
-                    bytes_sent = 0  # bytes sent on wire
-                    bytes_written = 0  # bytes written to flash
-                    t = time.time()
+                        # Compression didn't help, disable it for this file
+                        source = (
+                            "changed data"
+                            if reflashing
+                            else "input image"
+                            if name is None
+                            else f"file '{name}'"
+                        )
+                        log.note(
+                            f"Cannot compress {source} more than the original size, "
+                            f"will flash uncompressed. Compressed size {compsize} bytes"
+                            f" >= uncompressed {uncsize} bytes."
+                        )
+                        compress = False
 
-                    timeout = DEFAULT_TIMEOUT
-                    while len(image) >= 0:
-                        if not no_progress:
-                            log.progress_bar(
-                                cur_iter=image_size - len(image),
-                                total_iters=image_size,
-                                prefix=f"Writing at {address + bytes_written:#010x} ",
-                                suffix=f" {bytes_sent}/{image_size} bytes...",
-                            )
-                        if len(image) == 0:  # All data sent, print 100% and end
-                            break
-                        block = image[0 : esp.FLASH_WRITE_SIZE]
-                        block_len = len(block)
+                original_image = image  # Save the whole image in case retry is needed
+                # Try again if reconnect was successful
+                log.stage()
+                for attempt in range(1, esp.WRITE_FLASH_ATTEMPTS + 1):
+                    try:
+                        if not esp.IS_STUB:
+                            log.print("Erasing flash...")
                         if compress:
-                            # feeding each compressed block into the decompressor lets
-                            # us see block-by-block how much will be written
-                            block_uncompressed = len(decompress.decompress(block))
-                            block_timeout = max(
-                                DEFAULT_TIMEOUT,
-                                timeout_per_mb(
-                                    ERASE_WRITE_TIMEOUT_PER_MB, block_uncompressed
-                                ),
+                            # Decompress the compressed binary a block at a time, to
+                            # dynamically calculate the timeout based on the write size
+                            decompress = zlib.decompressobj()
+                            esp.flash_defl_begin(
+                                uncsize, image_size, address, encrypted_write=encrypted
                             )
-                            if not esp.IS_STUB:
-                                # ROM code writes block to flash before ACKing
-                                timeout = block_timeout
-                            # For compressed data, encryption is handled
-                            # via encrypted_write flag
-                            esp.flash_defl_block(block, seq, timeout=timeout)
-                            if esp.IS_STUB:
-                                # Stub ACKs when block is received, then writes
-                                # to flash while receiving the block after it
-                                timeout = block_timeout
-                            bytes_written += block_uncompressed
                         else:
-                            # Pad the last block
-                            block = block + b"\xff" * (esp.FLASH_WRITE_SIZE - block_len)
-                            esp.flash_block(block, seq, encrypted=encrypted)
-                            bytes_written += block_len  # Count without added padding
-                        bytes_sent += block_len
-                        image = image[esp.FLASH_WRITE_SIZE :]
-                        seq += 1
-                    break
-                except SerialException:
-                    if attempt == esp.WRITE_FLASH_ATTEMPTS or encrypted:
-                        # Already retried once or encrypted mode is disabled because of
-                        # security reasons
-                        raise
-                    log.print("\nLost connection, retrying...")
-                    esp._port.close()
-                    log.print("Waiting for the chip to reconnect", end="")
-                    for _ in range(DEFAULT_CONNECT_ATTEMPTS):
-                        try:
-                            time.sleep(1)
-                            esp._port.open()
-                            log.print()  # Print new line (was suppressed by print("."))
-                            esp.connect()
-                            if esp.IS_STUB:
-                                # Hack to bypass the stub overwrite check
-                                esp.IS_STUB = False
-                                # Reflash stub because chip was reset
-                                esp = esp.run_stub()
-                            image = original_image
-                            break
-                        except SerialException:
-                            log.print(".", end="", flush=True)
-                    else:
-                        raise  # Reconnect limit reached
+                            esp.flash_begin(uncsize, address, encrypted_write=encrypted)
+                        seq = 0
+                        bytes_sent = 0  # bytes sent on wire
+                        bytes_written = 0  # bytes written to flash
+                        t = time.time()
 
-            # Skip sending flash_finish to ROM loader here,
-            # as it causes the loader to exit and run user code
-            if esp.IS_STUB:
-                # Get the "encrypted" flag for the last file flashed
-                # Note: all_files list contains tuples like:
-                # (address: int, data:
-                # bytes, name: str | None,
-                # encrypted: bool,
-                # diff_data: bytes | None)
-                last_file_encrypted = all_files[-1][3]
+                        timeout = DEFAULT_TIMEOUT
+                        while len(image) >= 0:
+                            if not no_progress:
+                                log.progress_bar(
+                                    cur_iter=image_size - len(image),
+                                    total_iters=image_size,
+                                    prefix="Writing at "
+                                    f"{address + bytes_written:#010x} ",
+                                    suffix=f" {bytes_sent}/{image_size} bytes...",
+                                )
+                            if len(image) == 0:  # All data sent, print 100% and end
+                                break
+                            block = image[0 : esp.FLASH_WRITE_SIZE]
+                            block_len = len(block)
+                            if compress:
+                                # feeding each compressed block into the decompressor
+                                # lets us see block-by-block how much will be written
+                                block_uncompressed = len(decompress.decompress(block))
+                                block_timeout = max(
+                                    DEFAULT_TIMEOUT,
+                                    timeout_per_mb(
+                                        ERASE_WRITE_TIMEOUT_PER_MB, block_uncompressed
+                                    ),
+                                )
+                                if not esp.IS_STUB:
+                                    # ROM code writes block to flash before ACKing
+                                    timeout = block_timeout
+                                # For compressed data, encryption is handled
+                                # via encrypted_write flag
+                                esp.flash_defl_block(block, seq, timeout=timeout)
+                                if esp.IS_STUB:
+                                    # Stub ACKs when block is received, then writes
+                                    # to flash while receiving the block after it
+                                    timeout = block_timeout
+                                bytes_written += block_uncompressed
+                            else:
+                                # Pad the last block
+                                block = block + b"\xff" * (
+                                    esp.FLASH_WRITE_SIZE - block_len
+                                )
+                                esp.flash_block(block, seq, encrypted=encrypted)
+                                bytes_written += (
+                                    block_len  # Count without added padding
+                                )
+                            bytes_sent += block_len
+                            image = image[esp.FLASH_WRITE_SIZE :]
+                            seq += 1
+                        break
+                    except SerialException:
+                        if attempt == esp.WRITE_FLASH_ATTEMPTS or encrypted:
+                            # Already retried once or encrypted mode is disabled
+                            # because of security reasons
+                            raise
+                        log.print("\nLost connection, retrying...")
+                        esp._port.close()
+                        log.print("Waiting for the chip to reconnect", end="")
+                        for _ in range(DEFAULT_CONNECT_ATTEMPTS):
+                            try:
+                                time.sleep(1)
+                                esp._port.open()
+                                # Print new line (was suppressed by print("."))
+                                log.print()
+                                esp.connect()
+                                if esp.IS_STUB:
+                                    # Hack to bypass the stub overwrite check
+                                    esp.IS_STUB = False
+                                    # Reflash stub because chip was reset
+                                    esp = esp.run_stub()
+                                image = original_image
+                                break
+                            except SerialException:
+                                log.print(".", end="", flush=True)
+                        else:
+                            raise  # Reconnect limit reached
 
-                # Stub only writes each block to flash after 'ack'ing the receive,
-                # so do a final operation which will not be 'ack'ed
-                # until the last block has actually been written out to flash
-                if cur_cycle == len(cycles) - 1:  # Only end once, after the last cycle
-                    if compress and not last_file_encrypted:
-                        esp.flash_defl_finish(reboot=False, timeout=timeout)
-                    else:
-                        esp.flash_finish(reboot=False, timeout=timeout)
+                # Skip sending flash_finish to ROM loader here,
+                # as it causes the loader to exit and run user code
+                if esp.IS_STUB:
+                    # Get the "encrypted" flag for the last file flashed
+                    # Note: all_files list contains tuples like:
+                    # (address: int, data:
+                    # bytes, name: str | None,
+                    # encrypted: bool,
+                    # diff_data: bytes | None)
+                    last_file_encrypted = all_files[-1][3]
 
-            t = time.time() - t
-            speed_msg = ""
-            log.stage(finish=True)
-            if compress:
-                if t > 0.0:
-                    speed_msg = f" ({uncsize / t * 8 / 1000:.1f} kbit/s)"
-                log.print(
-                    f"Wrote {uncsize} bytes ({bytes_sent} compressed) "
-                    f"at {orig_address:#010x} in {t:.1f} seconds{speed_msg}."
-                )
-            else:
-                if t > 0.0:
-                    speed_msg = f" ({bytes_written / t * 8 / 1000:.1f} kbit/s)"
-                log.print(
-                    f"Wrote {bytes_written} bytes "
-                    f"at {orig_address:#010x} in {t:.1f} seconds{speed_msg}."
-                )
+                    # Stub only writes each block to flash after 'ack'ing the receive,
+                    # so do a final operation which will not be 'ack'ed
+                    # until the last block has actually been written out to flash
+                    if cur_cycle == len(cycles) - 1:  # Only end once, after last cycle
+                        if compress and not last_file_encrypted:
+                            esp.flash_defl_finish(reboot=False, timeout=timeout)
+                        else:
+                            esp.flash_finish(reboot=False, timeout=timeout)
 
-        log.stage()
-        log.print("Verifying written data...")
-        if not encrypted and not esp.secure_download_mode:
-            try:
-                res = esp.flash_md5sum(base_address, base_size)
+                t = time.time() - t
+                speed_msg = ""
                 log.stage(finish=True)
-                if res != image_md5:
-                    log.print(f"Input MD5: {image_md5}")
-                    log.print(f"Flash MD5: {res}")
-                    if res == hashlib.md5(b"\xff" * base_size).hexdigest():
-                        raise FatalError(
-                            "Write failed, the written flash region is empty."
-                        )
-                    raise FatalError("MD5 of file does not match data in flash!")
+                if compress:
+                    if t > 0.0:
+                        speed_msg = f" ({uncsize / t * 8 / 1000:.1f} kbit/s)"
+                    log.print(
+                        f"Wrote {uncsize} bytes ({bytes_sent} compressed) "
+                        f"at {orig_address:#010x} in {t:.1f} seconds{speed_msg}."
+                    )
                 else:
+                    if t > 0.0:
+                        speed_msg = f" ({bytes_written / t * 8 / 1000:.1f} kbit/s)"
+                    log.print(
+                        f"Wrote {bytes_written} bytes "
+                        f"at {orig_address:#010x} in {t:.1f} seconds{speed_msg}."
+                    )
+
+            log.stage()
+            log.print("Verifying written data...")
+            if not encrypted and not esp.secure_download_mode:
+                try:
+                    res = esp.flash_md5sum(base_address, base_size)
+                    log.stage(finish=True)
+                    if res != image_md5:
+                        if was_reflashing:
+                            log.note(
+                                "Verification failed after fast reflash (flash content "
+                                "did not match the expected data). "
+                                "Reflashing the whole image..."
+                            )
+                            cycles = [[full_image, base_address, name, False]]
+                            was_reflashing = False  # Next cycle will be a full reflash
+                            compress = compress_for_retry  # Re-evaluate compression
+                            continue
+                        log.print(f"Input MD5: {image_md5}")
+                        log.print(f"Flash MD5: {res}")
+                        if res == hashlib.md5(b"\xff" * base_size).hexdigest():
+                            raise FatalError(
+                                "Write failed, the written flash region is empty."
+                            )
+                        raise FatalError("MD5 of file does not match data in flash!")
                     log.print("Hash of data verified.")
-            except NotImplementedInROMError:
-                pass
-        else:
-            log.stage(finish=True)
-            log.print(
-                "Cannot verify written data if encrypted or in secure download mode."
-            )
+                except NotImplementedInROMError:
+                    pass
+            else:
+                log.stage(finish=True)
+                log.print(
+                    "Cannot verify written data if encrypted "
+                    "or in secure download mode."
+                )
+            break
 
 
 def read_mac(esp: ESPLoader) -> None:
@@ -1309,9 +1617,40 @@ def chip_id(esp: ESPLoader) -> None:
         read_mac(esp)
 
 
+def _verify_flash_connection(esp: ESPLoader) -> bool:
+    """
+    Verify flash chip connection using a two-step fallback:
+    SFDP register -> flash_id.
+    Skipped in secure download mode.
+
+    Note: SFDP check targets SPI NOR flash only.
+    It may not work with octal (OPI) flash or NAND flash (not supported by esptool).
+    Verification is heuristic: bus pull-ups/pull-downs or other devices on the
+    bus can affect results and lead to false positives or false negatives.
+    """
+    if esp.secure_download_mode:
+        return True
+
+    # Step 1: SFDP (Serial Flash Discoverable Parameters) - JEDEC standard for SPI NOR.
+    # Not applicable to NAND; OPI flash may use different commands/opcodes.
+    SFDP_SIGNATURE = 0x50444653  # "SFDP" in little-endian hex (0x53, 0x46, 0x44, 0x50)
+    sfdp = esp.read_spiflash_sfdp(0, 32)
+    if sfdp == SFDP_SIGNATURE:
+        return True
+
+    # Step 2: Fallback to flash_id check.
+    BAD_FLASH_IDS = (0xFFFFFF, 0x000000, 0xFFFF3F)
+    fid = esp.flash_id(cache=False)
+    if fid not in BAD_FLASH_IDS:
+        return True
+
+    return False
+
+
 def attach_flash(
     esp: ESPLoader,
     spi_connection: (tuple[int, int, int, int, int] | str) | None = None,
+    flash_type: str = "nor",
 ) -> None:
     """
     Configure and attach a SPI flash memory chip to the ESP device,
@@ -1325,6 +1664,7 @@ def attach_flash(
             ``(CLK, Q, D, HD, CS)`` for manual configuration
             or a string (``"SPI"`` or ``"HSPI"``) representing a pre-defined config.
             If not provided, the default flash connection is used.
+        flash_type: Type of flash - "nor" (default) or "nand".
     """
 
     def _define_spi_conn(spi_connection):
@@ -1346,8 +1686,16 @@ def attach_flash(
             # Encode the pin numbers as a 32-bit integer with packed 6-bit values,
             # the same way the ESP ROM takes them
             spi_config, value = _define_spi_conn(spi_connection)
-        log.print(f"Configuring SPI flash mode ({spi_config})...")
-        esp.flash_spi_attach(value)
+        flash_mode = "NAND" if flash_type == "nand" else "NOR"
+        log.print(f"Configuring SPI {flash_mode} flash mode ({spi_config})...")
+        if flash_type == "nand":
+            esp.flash_spi_nand_attach(value)
+        else:
+            esp.flash_spi_attach(value)
+    elif flash_type == "nand":
+        # For NAND, always call attach (both ROM and stub need initialization)
+        log.print("Enabling default SPI NAND flash mode...")
+        esp.flash_spi_nand_attach(0)
     elif not esp.IS_STUB:
         if esp.CHIP_NAME != "ESP32" or esp.secure_download_mode:
             log.print("Enabling default SPI flash mode...")
@@ -1365,6 +1713,10 @@ def attach_flash(
             else:
                 log.print("Enabling default SPI flash mode...")
             esp.flash_spi_attach(value)
+
+    # Skip XMC chip detection and flash size detection for NAND
+    if flash_type == "nand":
+        return
 
     def is_xmc_chip_strict():
         # Read ID without cache, because it should be different after the XMC startup
@@ -1419,25 +1771,22 @@ def attach_flash(
         except FatalError as e:
             esp.trace(f"Unable to perform XMC flash chip startup sequence ({e}).")
 
-    # Check flash chip connection
-    if not esp.secure_download_mode:
-        try:
-            flash_id = esp.flash_id()
-            if flash_id in (0xFFFFFF, 0x000000, 0xFFFF3F):
-                log.warning(
-                    "Failed to communicate with the flash chip, "
-                    "read/write operations will fail. "
-                    "Try checking the chip connections or removing "
-                    "any other hardware connected to IOs."
+    # Check flash chip connection (SFDP -> flash_id)
+    try:
+        if not _verify_flash_connection(esp):
+            log.warning(
+                "Failed to communicate with the flash chip, "
+                "read/write operations will fail. "
+                "Try checking the chip connections or removing "
+                "any other hardware connected to IOs."
+            )
+            if spi_connection is not None:
+                log.note(
+                    "Some GPIO pins might be used by other peripherals, try using "
+                    "another combination of pins for SPI flash connection."
                 )
-                if spi_connection is not None:
-                    log.note(
-                        "Some GPIO pins might be used by other peripherals, try using "
-                        "another combination of pins for SPI flash connection."
-                    )
-
-        except FatalError as e:
-            raise FatalError(f"Unable to verify flash chip connection ({e}).")
+    except FatalError as e:
+        raise FatalError(f"Unable to verify flash chip connection ({e}).")
 
     if not esp.secure_download_mode:
         try:
@@ -1514,14 +1863,49 @@ def _set_flash_parameters(esp, flash_size="keep"):
     return "keep" if keep else flash_size
 
 
-def erase_flash(esp: ESPLoader, force: bool = False) -> None:
+NAND_BLOCK_COUNT = 1024
+NAND_TOTAL_SIZE = NAND_BLOCK_COUNT * NAND_BLOCK_SIZE  # 128 MB
+MAX_NAND_RETRIES = 4
+
+
+def erase_flash(esp: ESPLoader, force: bool = False, flash_type: str = "nor") -> None:
     """
     Erase the SPI flash memory of the ESP device.
 
     Args:
         esp: Initiated esp object connected to a real device.
         force: Bypass the security checks for flash encryption and secure boot.
+        flash_type: "nor" or "nand".
     """
+    if flash_type == "nand":
+        _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+        log.stage()
+        log.print("Erasing NAND flash (all blocks including bad-marked)...")
+        t = time.time()
+        erased = 0
+        failed = 0
+        for blk in range(NAND_BLOCK_COUNT):
+            blk_addr = blk * NAND_BLOCK_SIZE
+            page_num = blk * NAND_PAGES_PER_BLOCK
+            try:
+                esp.erase_nand_region(blk_addr, NAND_BLOCK_SIZE)
+                erased += 1
+            except NANDEraseFailed:
+                log.warning(
+                    f"E_FAIL reported by NAND chip at {blk_addr:#010x}, "
+                    "marking as bad block"
+                )
+                failed += 1
+                try:
+                    esp.write_nand_spare(page_num, 1)
+                except FatalError:
+                    log.warning("Failed to mark block as bad, continuing anyway")
+        log.stage(finish=True)
+        log.print(
+            f"NAND erase complete in {time.time() - t:.1f}s: "
+            f"{erased} blocks erased, {failed} failed (marked bad)."
+        )
+        return
     if not force and esp.CHIP_NAME != "ESP8266" and not esp.secure_download_mode:
         if esp.get_flash_encryption_enabled() or esp.get_secure_boot_enabled():
             raise FatalError(
@@ -1543,7 +1927,13 @@ def erase_flash(esp: ESPLoader, force: bool = False) -> None:
     log.print(f"Flash memory erased successfully in {time.time() - t:.1f} seconds.")
 
 
-def erase_region(esp: ESPLoader, address: int, size: int, force: bool = False) -> None:
+def erase_region(
+    esp: ESPLoader,
+    address: int,
+    size: int,
+    force: bool = False,
+    flash_type: str = "nor",
+) -> None:
     """
     Erase a specific region of the SPI flash memory of the ESP device.
 
@@ -1552,7 +1942,48 @@ def erase_region(esp: ESPLoader, address: int, size: int, force: bool = False) -
         address: The starting address from which to begin erasing.
         size: The total number of bytes to erase.
         force: Bypass the security checks for flash encryption and secure boot.
+        flash_type: "nor" or "nand".
     """
+    if flash_type == "nand":
+        _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+        if address % NAND_BLOCK_SIZE != 0:
+            raise FatalError(
+                "Offset to erase from must be a multiple of "
+                f"NAND block size ({NAND_BLOCK_SIZE})."
+            )
+        if size % NAND_BLOCK_SIZE != 0:
+            raise FatalError(
+                "Size of data to erase must be a multiple of "
+                f"NAND block size ({NAND_BLOCK_SIZE})."
+            )
+        log.stage()
+        log.print("Erasing NAND flash region...")
+        t = time.time()
+        erased = 0
+        failed = 0
+        blk_addr = address
+        while blk_addr < address + size:
+            page_num = blk_addr // NAND_BLOCK_SIZE * NAND_PAGES_PER_BLOCK
+            try:
+                esp.erase_nand_region(blk_addr, NAND_BLOCK_SIZE)
+                erased += 1
+            except NANDEraseFailed:
+                log.warning(
+                    f"E_FAIL reported by NAND chip at {blk_addr:#010x}, "
+                    "marking as bad block"
+                )
+                failed += 1
+                try:
+                    esp.write_nand_spare(page_num, 1)
+                except FatalError:
+                    log.warning("Failed to mark block as bad, continuing anyway")
+            blk_addr += NAND_BLOCK_SIZE
+        log.stage(finish=True)
+        log.print(
+            f"NAND region erase complete in {time.time() - t:.1f}s: "
+            f"{erased} blocks erased, {failed} failed (marked bad)."
+        )
+        return
     if address % ESPLoader.FLASH_SECTOR_SIZE != 0:
         raise FatalError(
             f"Offset to erase from must be a multiple of {ESPLoader.FLASH_SECTOR_SIZE}."
@@ -1563,6 +1994,19 @@ def erase_region(esp: ESPLoader, address: int, size: int, force: bool = False) -
             f"{ESPLoader.FLASH_SECTOR_SIZE}."
         )
     if not force and esp.CHIP_NAME != "ESP8266" and not esp.secure_download_mode:
+        # Protect key recovery region when flash encryption uses key manager
+        if (
+            esp.get_flash_encryption_enabled()
+            and esp.uses_key_manager_for_flash_encryption()
+            and address < 0x2000
+        ):
+            raise FatalError(
+                "Flash encryption with Key Manager detected, "
+                "erasing flash region 0x0-0x2000 is disabled "
+                "to protect key recovery info. "
+                "Use the force argument to override, "
+                "please use with caution, otherwise it may brick your device!"
+            )
         if esp.get_flash_encryption_enabled() or esp.get_secure_boot_enabled():
             raise FatalError(
                 "Active security features detected, "
@@ -1667,6 +2111,8 @@ def read_flash(
     output: str | None = None,
     flash_size: str = "keep",
     no_progress: bool = False,
+    flash_type: str = "nor",
+    nand_end_address: int | None = None,
 ) -> bytes | None:
     """
     Read a specified region of SPI flash memory of an ESP device
@@ -1684,12 +2130,15 @@ def read_flash(
             ``"keep"``: auto-detect but skip setting parameters in SDM,
             Explicit size: use the specified flash size.
         no_progress: Disable printing progress.
+        flash_type: Type of flash - "nor" (default) or "nand".
 
     Returns:
         The read flash data as bytes if output is None; otherwise,
         returns None after writing to file.
     """
-    _set_flash_parameters(esp, flash_size)
+    if flash_type != "nand":
+        _set_flash_parameters(esp, flash_size)
+
     if no_progress:
         flash_progress = None
     else:
@@ -1704,7 +2153,13 @@ def read_flash(
 
     log.stage()
     t = time.time()
-    data = esp.read_flash(address, size, flash_progress)
+    if flash_type == "nand":
+        _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+        data = _read_flash_nand_with_skip(
+            esp, address, size, flash_progress, nand_end_address=nand_end_address
+        )
+    else:
+        data = esp.read_flash(address, size, flash_progress)
     t = time.time() - t
     speed_msg = " ({:.1f} kbit/s)".format(len(data) / t * 8 / 1000) if t > 0.0 else ""
     dest_msg = f" to '{output}'" if output else ""
@@ -1728,6 +2183,7 @@ def verify_flash(
     flash_mode: str = "keep",
     flash_size: str = "keep",
     diff: bool = False,
+    flash_type: str = "nor",
 ) -> None:
     """
     Verify the contents of the SPI flash memory against the provided binary files
@@ -1742,17 +2198,74 @@ def verify_flash(
         flash_mode: Flash mode setting (``"keep"`` to retain current).
         flash_size: Flash size setting (``"keep"`` to retain current).
         diff: If True, perform a byte-by-byte comparison on failure.
+        flash_type: "nor" or "nand".
     """
-    flash_size = _set_flash_parameters(esp, flash_size)  # Set flash size parameters
+    if flash_type != "nand":
+        flash_size = _set_flash_parameters(esp, flash_size)
     mismatch = False
 
     for address, data in addr_data:
         data, source = get_bytes(data)
-        image = pad_to(data, 4)
 
-        image = _update_image_flash_params(
-            esp, address, flash_freq, flash_mode, flash_size, image
-        )
+        if flash_type == "nand":
+            _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+            if address % NAND_BLOCK_SIZE != 0:
+                raise FatalError(
+                    f"For NAND flash, verify address must be a multiple of "
+                    f"NAND block size ({NAND_BLOCK_SIZE:#x})."
+                )
+            image = pad_to(data, NAND_BLOCK_SIZE)
+            image_size = len(image)
+            source = "input bytes" if source is None else f"'{source}'"
+            log.print(
+                f"Verifying {image_size:#x} ({image_size}) bytes "
+                f"at {address:#010x} against {source}..."
+            )
+            phys_addr = address
+            chunk_mismatch = False
+            for chunk_start in range(0, image_size, NAND_BLOCK_SIZE):
+                chunk = image[chunk_start : chunk_start + NAND_BLOCK_SIZE]
+                # Find next good block (same skip logic as write)
+                found = False
+                for _ in range(MAX_NAND_RETRIES):
+                    page_num = phys_addr // NAND_BLOCK_SIZE * NAND_PAGES_PER_BLOCK
+                    bb = esp.read_nand_spare(page_num) & 0xFF
+                    if bb == 0xFF:
+                        found = True
+                        break
+                    log.print(f"Skipping bad block at {phys_addr:#010x} during verify")
+                    phys_addr += NAND_BLOCK_SIZE
+                if not found:
+                    raise FatalError(
+                        f"Could not find good block near {phys_addr:#010x} "
+                        "during verify"
+                    )
+                flash_chunk = esp.read_flash_nand(phys_addr, len(chunk))
+                if flash_chunk != chunk:
+                    chunk_mismatch = True
+                    if diff:
+                        differences = [
+                            i for i in range(len(chunk)) if flash_chunk[i] != chunk[i]
+                        ]
+                        log.print(
+                            f"  Block at {phys_addr:#010x}: "
+                            f"{len(differences)} byte differences, "
+                            f"first at offset {differences[0]}"
+                        )
+                    else:
+                        log.print(f"  Block at {phys_addr:#010x}: MISMATCH")
+                phys_addr += NAND_BLOCK_SIZE
+            if chunk_mismatch:
+                mismatch = True
+                log.print("Verification failed.")
+            else:
+                log.print("Verification successful.")
+            continue
+        else:
+            image = pad_to(data, 4)
+            image = _update_image_flash_params(
+                esp, address, flash_freq, flash_mode, flash_size, image
+            )
 
         image_size = len(image)
         source = "input bytes" if source is None else f"'{source}'"
@@ -1760,6 +2273,7 @@ def verify_flash(
             f"Verifying {image_size:#x} ({image_size}) bytes "
             f"at {address:#010x} in flash against {source}..."
         )
+
         # Try digest first, only read if there are differences.
         digest = esp.flash_md5sum(address, image_size)
         expected_digest = hashlib.md5(image).hexdigest()
@@ -1939,13 +2453,14 @@ def reset_chip(esp: ESPLoader, reset_mode: str = "hard-reset") -> None:
         raise FatalError(f"Invalid reset mode: {reset_mode}")
 
 
-def run_stub(esp: ESPLoader) -> ESPLoader:
+def run_stub(esp: ESPLoader, plugins: list[str] | None = None) -> ESPLoader:
     """
     Load and execute the stub loader on the ESP device. If stub loading
     is not supported or is explicitly disabled, warnings are logged.
 
     Args:
         esp: Initiated esp object connected to a real device.
+        plugins: Optional list of plugin names to load (e.g. ["nand"]).
 
     Returns:
         The esp instance, either as a stub child class in a state
@@ -1969,7 +2484,6 @@ def run_stub(esp: ESPLoader) -> ESPLoader:
         )
     elif esp.CHIP_NAME in [
         "ESP32-H21",
-        "ESP32-S31",
         "ESP32-E22",
     ]:  # TODO: [ESP32H21] IDF-11509
         log.warning(
@@ -1978,10 +2492,11 @@ def run_stub(esp: ESPLoader) -> ESPLoader:
         )
     else:
         try:
-            return esp.run_stub()
+            stub = StubFlasher(esp, plugins=plugins)
+            return esp.run_stub(stub)
         except Exception:
             # The CH9102 bridge (PID: 0x55D4) can have issues on MacOS
-            if sys.platform == "darwin" and esp._get_pid() == 0x55D4:
+            if sys.platform == "darwin" and esp.get_usb_vid_pid()[1] == 0x55D4:
                 log.print()
                 log.note(
                     "If issues persist, "
@@ -2685,3 +3200,74 @@ def version() -> None:
     from . import __version__
 
     log.print(__version__)
+
+
+def read_nand_spare(esp: ESPLoader, page_number: int) -> None:
+    """
+    Read NAND flash spare area for a given page.
+
+    Args:
+        esp: Initiated esp object connected to a real device.
+        page_number: The page number to read spare area from.
+    """
+    _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+    data = esp.read_nand_spare(page_number)
+    log.print(
+        f"NAND spare for page {page_number}: first word {data:#010x} "
+        f"(bad-block marker byte = {data & 0xFF:#04x})"
+    )
+
+
+def write_nand_spare(esp: ESPLoader, page_number: int, is_bad: int) -> None:
+    """
+    Write NAND flash spare area to mark bad blocks.
+
+    JEDEC spare convention: good block = spare bytes 0xFF,
+    bad block = spare bytes 0x00. is_bad=1 writes 0x00 (marks bad),
+    is_bad=0 writes 0xFF (marks good). Note: to fully restore a bad-marked
+    block to 0xFF, a block erase is needed (write alone may not suffice).
+
+    Args:
+        esp: Initiated esp object connected to a real device.
+        page_number: The page number to write spare area to.
+        is_bad: Flag to mark block as bad (1) or good (0).
+    """
+    _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+    data = esp.write_nand_spare(page_number, is_bad)
+    log.print(f"NAND spare written for page {page_number}: echo {data:#010x}")
+
+
+def dump_bbm(esp: ESPLoader, output: str, block_count: int = NAND_BLOCK_COUNT) -> None:
+    """
+    Read bad-block markers for all blocks and save as a compact binary file.
+
+    For each block 0..block_count-1, reads the spare area of the first page
+    (page = block * NAND_PAGES_PER_BLOCK).  A spare first byte of 0xFF means
+    the block is good (0x00 in the output); any other value means the block
+    is bad (0x01 in the output).  The output file is exactly block_count
+    bytes long.
+
+    Args:
+        esp: Initiated esp object connected to a real device.
+        output: Path to write the binary BBM file.
+        block_count: Number of blocks to scan (default: NAND_BLOCK_COUNT = 1024).
+    """
+    _warn_nand_experimental(_NAND_EXPERIMENTAL_MSG)
+    bbm = bytearray(block_count)
+    bad_indices = []
+    for blk in range(block_count):
+        page_num = blk * NAND_PAGES_PER_BLOCK
+        spare = esp.read_nand_spare(page_num)
+        if (spare & 0xFF) == 0xFF:
+            bbm[blk] = 0x00  # good
+        else:
+            bbm[blk] = 0x01  # bad
+            bad_indices.append(blk)
+
+    with open(output, "wb") as f:
+        f.write(bytes(bbm))
+
+    log.print(f"BBM dump: {block_count} blocks scanned, {len(bad_indices)} bad.")
+    if bad_indices:
+        log.print(f"Bad block indices: {bad_indices}")
+    log.print(f"Written to '{output}' ({block_count} bytes, 0x00=good 0x01=bad).")

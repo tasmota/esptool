@@ -6,14 +6,13 @@
 
 from io import IOBase
 from typing import BinaryIO
+
 import rich_click as click
 
 import espsecure
 import esptool
 from esptool.logger import log
 
-from . import fields
-from .mem_definition import EfuseDefineBlocks
 from .. import util
 from ..base_operations import (
     BaseCommands,
@@ -23,6 +22,8 @@ from ..base_operations import (
     add_show_sensitive_info_option,
     protect_options,
 )
+from . import fields
+from .mem_definition import EfuseDefineBlocks
 
 
 class ESP32C5Commands(BaseCommands):
@@ -174,6 +175,12 @@ class ESP32C5Commands(BaseCommands):
                 datafile.close()
             else:
                 data = datafile
+
+            if block.key_purpose_name is None:
+                # This should never happen, but it makes mypy happy.
+                raise esptool.FatalError(
+                    f"Key purpose name is not set for block {block.name}."
+                )
 
             log.print(f" - {efuse.name}", end=" ")
             revers_msg = None

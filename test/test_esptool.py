@@ -30,9 +30,10 @@ import sys
 import tempfile
 from io import StringIO
 from socket import AF_INET, SOCK_STREAM, socket
-from time import sleep
-from unittest.mock import MagicMock
-from unittest.mock import patch
+from time import monotonic, sleep
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Link command line options --port, --chip, --baud, --with-trace, and --preload-port
 from conftest import (
@@ -44,21 +45,19 @@ from conftest import (
     need_to_install_package_err,
 )
 
-
-import pytest
-
 try:
-    import esptool
     import espefuse
+    import esptool
+    from esptool import FatalError
     from esptool.cmds import (
+        attach_flash,
         detect_chip,
         erase_flash,
-        attach_flash,
         flash_id,
         image_info,
         merge_bin,
-        read_flash_sfdp,
         read_flash,
+        read_flash_sfdp,
         read_mac,
         reset_chip,
         verify_flash,
@@ -69,7 +68,6 @@ except ImportError:
     need_to_install_package_err()
 
 import serial
-
 
 TEST_DIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -106,7 +104,13 @@ class ESPRFC2217Server:
         return port
 
     def wait_for_server_starts(self, attempts_count):
+        # The RFC2217 server listens on IPv4 (AF_INET). Use 127.0.0.1 here, not
+        # "localhost", which may resolve to ::1 first on Linux CI and never
+        # reach the IPv4 listener.
+        connect_deadline_s = 15.0
+        poll_interval_s = 0.25
         for attempt in range(attempts_count):
+            self.p = None
             try:
                 self.p = subprocess.Popen(
                     self.cmd,
@@ -115,20 +119,36 @@ class ESPRFC2217Server:
                     stderr=subprocess.STDOUT,
                     close_fds=True,
                 )
-                sleep(2)
-                s = socket(AF_INET, SOCK_STREAM)
-                result = s.connect_ex(("localhost", self.port))
-                s.close()
-                if result == 0:
-                    print("Server started successfully.")
-                    return
+                deadline = monotonic() + connect_deadline_s
+                while monotonic() < deadline:
+                    if self.p.poll() is not None:
+                        self.server_output_file.flush()
+                        print(
+                            f"RFC2217 server exited early (code {self.p.returncode})."
+                        )
+                        break
+                    probe = socket(AF_INET, SOCK_STREAM)
+                    probe.settimeout(0.5)
+                    try:
+                        if probe.connect_ex(("127.0.0.1", self.port)) == 0:
+                            print("Server started successfully.")
+                            return
+                    finally:
+                        probe.close()
+                    sleep(poll_interval_s)
             except Exception as e:
                 print(e)
             print(
                 "Server start failed."
                 + (" Retrying . . ." if attempt < attempts_count - 1 else "")
             )
-            self.p.terminate()
+            if self.p is not None:
+                self.p.terminate()
+                try:
+                    self.p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.p.kill()
+            self.server_output_file.flush()
         raise Exception("Server not started successfully!")
 
     def __enter__(self):
@@ -727,6 +747,73 @@ class TestFlashing(EsptoolTestCase):
         )
         assert "Detected overlap at address: 0x1d00" in output
 
+    def _esp_mock_for_encryption_check(
+        self,
+        flash_encryption_enabled=True,
+        encrypted_download_disabled=True,
+    ):
+        """
+        Minimal esp mock so write_flash reaches the Production-mode plaintext check.
+
+        Production mode: flash encryption on + UART manual encrypt disabled.
+        Development mode: set encrypted_download_disabled=False (plaintext allowed).
+        """
+        esp = MagicMock()
+        esp.get_flash_encryption_enabled.return_value = flash_encryption_enabled
+        esp.get_encrypted_download_disabled.return_value = encrypted_download_disabled
+        esp.CHIP_NAME = "esp32"
+        esp.IMAGE_CHIP_ID = 0
+        esp.secure_download_mode = False
+        esp.get_secure_boot_v1_enabled.return_value = False
+        esp.IS_STUB = True
+        esp.get_major_chip_version.return_value = 0
+        esp.get_minor_chip_version.return_value = 0
+        esp.get_chip_revision.return_value = 0
+        return esp
+
+    @pytest.mark.quick_test
+    @pytest.mark.host_test
+    def test_write_flash_production_plaintext_guard(self):
+        """
+        Single cheap pass through write_flash to validate Production-mode guard:
+        reject flashing without --force (both image and non-image payloads), allow
+        with --force, and allow in Development (UART encrypt not disabled).
+        """
+        with open(os.path.join(TEST_DIR, "images", "bootloader_esp32.bin"), "rb") as f:
+            bootloader = f.read()
+        payload_plain = [(0x10000, bootloader)]
+        payload_non_image = [(0x20000, b"\x00" * 64)]
+
+        esp_prod = self._esp_mock_for_encryption_check(True, True)
+        with pytest.raises(FatalError) as exc_info:
+            write_flash(esp_prod, payload_plain, force=False)
+        msg = str(exc_info.value)
+        assert "Detected flash encryption enabled" in msg
+        assert "download manual encrypt disabled" in msg
+        with pytest.raises(FatalError):
+            write_flash(esp_prod, payload_non_image, force=False)
+
+        try:
+            write_flash(esp_prod, payload_plain, force=True)
+        except FatalError as e:
+            assert "download manual encrypt disabled" not in str(e)
+        except Exception:
+            pass
+        try:
+            write_flash(esp_prod, payload_non_image, force=True)
+        except FatalError as e:
+            assert "download manual encrypt disabled" not in str(e)
+        except Exception:
+            pass
+
+        esp_dev = self._esp_mock_for_encryption_check(True, False)
+        try:
+            write_flash(esp_dev, payload_plain, force=False)
+        except FatalError as e:
+            assert "download manual encrypt disabled" not in str(e)
+        except Exception:
+            pass
+
     def test_write_no_overlap(self):
         output = self.run_esptool(
             "write-flash 0x0 images/one_kb.bin 0x2000 images/one_kb.bin"
@@ -1000,10 +1087,7 @@ class TestFlashing(EsptoolTestCase):
             output = self.run_esptool(
                 f"write-flash {addr} {new_bin.name} --diff-with {old_bin.name}"
             )
-            assert (
-                "Diff data in flash matches, will reflash changed sectors only"
-                in output
-            )
+            assert "Changed data sectors found, fast reflashing..." in output
             assert "Reflashing 1 changed sector at 0x0" in output
 
             # Verify new content is in flash
@@ -1042,10 +1126,7 @@ class TestFlashing(EsptoolTestCase):
                 f"--no-stub write-flash {addr} {new_bin.name} "
                 f"--diff-with {old_bin.name}"
             )
-            assert (
-                "Diff data in flash matches, will reflash changed sectors only"
-                in output
-            )
+            assert "Changed data sectors found, fast reflashing..." in output
 
             # Verify new content is in flash
             self.verify_readback(addr, TEST_FILE_SIZE_16KB, new_bin.name)
@@ -1079,32 +1160,73 @@ class TestFlashing(EsptoolTestCase):
             try:
                 self.run_esptool(f"write-flash {addr} {different_bin.name}")
 
-                # Fast reflash with new file - should detect mismatch and do full flash
+                # Flash has different_bin; we assume old_bin, reflash changed sectors,
+                # then post-flash MD5 fails and we full reflash
                 output = self.run_esptool(
                     f"write-flash {addr} {new_bin.name} --diff-with {old_bin.name}"
                 )
                 assert (
-                    "Diff data in flash has changed, flashing all of the new data"
-                    in output
-                )
+                    "Reflashing the whole file" in output
+                    or "Verification failed after fast reflash" in output
+                ), f"Expected fallback to full reflash; output: {output[:600]}"
 
                 # Verify new content is in flash
                 self.verify_readback(addr, TEST_FILE_SIZE_16KB, new_bin.name)
 
-                # Fast reflash with --no-diff-verify
+                # Fast reflash with --trust-flash-content
                 output = self.run_esptool(
                     f"write-flash {addr} {old_bin.name} "
-                    f"--diff-with {new_bin.name} --no-diff-verify"
+                    f"--diff-with {new_bin.name} --trust-flash-content"
                 )
-                assert (
-                    "No diff verification enabled, "
-                    "will reflash changed sectors without pre-verification" in output
-                )
-                assert "Reflashing 1 changed sector at 0x0" in output
+                assert "Changed data sectors found, fast reflashing..." in output
+                assert "Reflashing 1 changed sector" in output
                 # Verify new content is in flash
                 self.verify_readback(addr, TEST_FILE_SIZE_16KB, old_bin.name)
             finally:
                 os.unlink(different_bin.name)
+        finally:
+            os.unlink(old_bin.name)
+            os.unlink(new_bin.name)
+
+    def test_trust_flash_content_md5_mismatch_reflashes_whole_file(self):
+        """
+        With --trust-flash-content, MD5 mismatch after fast reflash runs full reflash.
+        """
+        old_bin = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
+        new_bin = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
+        try:
+            old_data = self.create_test_data(TEST_FILE_SIZE_16KB)
+            old_bin.write(old_data)
+            old_bin.close()
+
+            new_data = bytearray(old_data)
+            new_data[0:100] = [0xBB] * 100
+            new_bin.write(new_data)
+            new_bin.close()
+
+            addr = 0x10000
+            # Flash something that is neither old nor new (so diff assumption is wrong)
+            wrong_data = self.create_test_data(TEST_FILE_SIZE_16KB, pattern=0xCC)
+            wrong_bin = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
+            wrong_bin.write(wrong_data)
+            wrong_bin.close()
+            try:
+                self.run_esptool(f"write-flash {addr} {wrong_bin.name}")
+
+                # --trust-flash-content: we assume flash has old_bin, only write diff.
+                # Flash actually has wrong_bin, so result will be wrong and MD5 fails.
+                # esptool should then reflash the whole file.
+                output = self.run_esptool(
+                    f"write-flash {addr} {new_bin.name} "
+                    f"--diff-with {old_bin.name} --trust-flash-content"
+                )
+                assert (
+                    "Verification failed after fast reflash" in output
+                    and "Reflashing the whole image" in output
+                )
+                self.verify_readback(addr, TEST_FILE_SIZE_16KB, new_bin.name)
+            finally:
+                os.unlink(wrong_bin.name)
         finally:
             os.unlink(old_bin.name)
             os.unlink(new_bin.name)
@@ -1142,10 +1264,7 @@ class TestFlashing(EsptoolTestCase):
                 f"--diff-with {old_bin.name} skip"
             )
             # First file should use fast reflash, second should be normal
-            assert (
-                "Diff data in flash matches, will reflash changed sectors only"
-                in output
-            )
+            assert "Changed data sectors found, fast reflashing..." in output
 
             # Verify both contents are in flash
             self.verify_readback(addr1, 8 * 1024, new_bin1.name)
@@ -1819,7 +1938,10 @@ class TestUSBMode(EsptoolTestCase):
 
 
 @pytest.mark.flaky(reruns=5)
-@pytest.mark.skipif(arg_preload_port is not False, reason="USB-to-UART bridge only")
+@pytest.mark.skipif(
+    "ESPTOOL_TEST_USB_OTG" in os.environ or arg_preload_port is not False,
+    reason="USB-to-UART bridge only",
+)
 @pytest.mark.skipif(os.name == "nt", reason="Linux/MacOS only")
 class TestVirtualPort(TestAutoDetect):
     def test_auto_detect_virtual_port(self):
@@ -1827,13 +1949,13 @@ class TestVirtualPort(TestAutoDetect):
             output = self.run_esptool(
                 "chip-id",
                 chip="auto",
-                port=f"rfc2217://localhost:{str(server.port)}?ign_set_control",
+                port=f"rfc2217://127.0.0.1:{str(server.port)}?ign_set_control",
             )
             self._check_output(output)
 
     def test_highspeed_flash_virtual_port(self):
         with ESPRFC2217Server() as server:
-            rfc2217_port = f"rfc2217://localhost:{str(server.port)}?ign_set_control"
+            rfc2217_port = f"rfc2217://127.0.0.1:{str(server.port)}?ign_set_control"
             self.run_esptool(
                 "write-flash 0x0 images/fifty_kb.bin",
                 baud=921600,
