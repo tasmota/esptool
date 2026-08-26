@@ -322,12 +322,14 @@ When Secure Download Mode is enabled, the available serial protocol commands are
 
    See the :ref:`supported-in-sdm` section for more details.
 
-Secure Boot Limitations
-^^^^^^^^^^^^^^^^^^^^^^^
+.. only:: esp32c3
 
-- The :ref:`flasher stub <stub>` cannot currently be used on ESP32-C3 when Secure Boot is enabled.
+   Secure Boot Limitations
+   ^^^^^^^^^^^^^^^^^^^^^^^
 
-   - This is due to a bug in the ROM bootloader that prevents custom code loaded into RAM from being executed.
+   - The :ref:`flasher stub <stub>` cannot currently be used on ESP32-C3 when Secure Boot is enabled.
+
+      - This is due to a bug in the ROM bootloader that prevents custom code loaded into RAM from being executed.
 
 .. _wdt-reset-limitations:
 
