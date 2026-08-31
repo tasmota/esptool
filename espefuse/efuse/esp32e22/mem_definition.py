@@ -61,12 +61,15 @@ class EfuseDefineRegisters(EfuseRegistersBase):
         (EFUSE_RD_RS_ERR1_REG, 0x7, 4, 7),  # BLOCK_SYS_DATA2
     ]
 
-    ERRORS = [
+    BLOCK0_ERRORS = [
         EFUSE_RD_REPEAT_ERR0_REG,
         EFUSE_RD_REPEAT_ERR1_REG,
         EFUSE_RD_REPEAT_ERR2_REG,
         EFUSE_RD_REPEAT_ERR3_REG,
         EFUSE_RD_REPEAT_ERR4_REG,
+    ]
+
+    ERRORS = BLOCK0_ERRORS + [
         EFUSE_RD_RS_ERR0_REG,
         EFUSE_RD_RS_ERR1_REG,
     ]

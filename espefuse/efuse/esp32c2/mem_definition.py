@@ -65,8 +65,11 @@ class EfuseDefineRegisters(EfuseRegistersBase):
     EFUSE_DAC_NUM_S = 9
     EFUSE_DAC_NUM_M = 0xFF << EFUSE_DAC_NUM_S
 
-    ERRORS = [
+    BLOCK0_ERRORS = [
         EFUSE_RD_REPEAT_ERR_REG,
+    ]
+
+    ERRORS = BLOCK0_ERRORS + [
         EFUSE_RD_RS_ERR_REG,
     ]
 

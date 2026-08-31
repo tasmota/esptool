@@ -16,6 +16,7 @@ from .csv_table_parser import CSVFuseTable
 class EfuseRegistersBase:
     EFUSE_MEM_SIZE: int
     DR_REG_EFUSE_BASE: int
+    BLOCK0_ERRORS: list[int] = []
     ERRORS: list[int] = []
 
     # Coding Scheme values
